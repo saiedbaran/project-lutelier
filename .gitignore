@@ -60,3 +60,20 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# Local build artifacts and resource collection working files
+DerivedData/
+build/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.*
+!.env.example
+/*.zip
+/portrait-reference*
+/silo_translation/
+LutelierIOS/studio-research/
+LutelierPreview/cover-transition.jpg
+LutelierPreview/camera-auto.jpg
+LutelierPreview/camera-controls.jpg

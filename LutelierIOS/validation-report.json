@@ -1,0 +1,35 @@
+{
+  "status": "passed",
+  "checks": 812,
+  "looks": 114,
+  "categories": {
+    "Movies": 26,
+    "Cameras": 21,
+    "Color film": 13,
+    "Black & white": 11,
+    "Cinematic": 12,
+    "Vintage": 8,
+    "Instant": 4,
+    "Moody": 6,
+    "Bright & airy": 6,
+    "Creative": 7
+  },
+  "lut_megabytes": 62.51,
+  "icon_alpha_extrema": [
+    255,
+    255
+  ],
+  "native_build": "Not run: Windows host has no Xcode or iOS SDK",
+  "native_tests": "RenderTests.swift provided; requires Mac simulator",
+  "studio_references": 100,
+  "studio_categories": {
+    "Classic noir": 19,
+    "Editorial": 18,
+    "Gel & colour": 33,
+    "Modern studio": 16,
+    "Portrait study": 14
+  },
+  "studio_megabytes": 3.15,
+  "minimum_ios": "27.0",
+  "studio_native_generation": "Not tested: needs supported iOS 27 Apple Intelligence device"
+}
