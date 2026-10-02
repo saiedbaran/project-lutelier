@@ -1,6 +1,6 @@
 {
   "status": "passed",
-  "checks": 812,
+  "checks": 826,
   "looks": 114,
   "categories": {
     "Movies": 26,
@@ -31,5 +31,8 @@
   },
   "studio_megabytes": 3.15,
   "minimum_ios": "27.0",
-  "studio_native_generation": "Not tested: needs supported iOS 27 Apple Intelligence device"
+  "studio_native_generation": "Not tested: needs supported iOS 27 Apple Intelligence device",
+  "depth_model": "DepthAnythingV2SmallF16",
+  "depth_weights_sha256": "fa60d9b6a155734f59029ebb882fd54e549bfaee3539c1a9cbd2cbbab64a0fed",
+  "depth_inference": "Not run: needs Core ML on Apple hardware"
 }

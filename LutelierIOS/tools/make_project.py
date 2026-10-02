@@ -22,7 +22,7 @@ for path in sorted((root/'Lutelier/Sources').glob('*.swift')):
 test_ref = obj('testfile', 'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LutelierTests/RenderTests.swift; sourceTree = SOURCE_ROOT;')
 test_build = obj('testbuild', f'isa = PBXBuildFile; fileRef = {test_ref};')
 resources = []
-for name, path, kind in [('Looks','Lutelier/Resources/Looks','folder'), ('Studio','Lutelier/Resources/Studio','folder'), ('Assets','Lutelier/Assets.xcassets','folder.assetcatalog')]:
+for name, path, kind in [('Looks','Lutelier/Resources/Looks','folder'), ('Studio','Lutelier/Resources/Studio','folder'), ('Models','Lutelier/Resources/Models','folder'), ('Assets','Lutelier/Assets.xcassets','folder.assetcatalog')]:
     ref = obj(name, f'isa = PBXFileReference; lastKnownFileType = {kind}; path = "{path}"; sourceTree = SOURCE_ROOT;')
     files.append(ref)
     resources.append(obj(name+'build', f'isa = PBXBuildFile; fileRef = {ref};'))

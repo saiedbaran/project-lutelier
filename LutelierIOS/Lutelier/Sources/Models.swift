@@ -27,18 +27,26 @@ final class LensMotion: ObservableObject {
 struct LensLogo: View {
     @ObservedObject var motion: LensMotion
     var size: CGFloat
+    var castsShadow = true
     var body: some View {
         Image("BrandIcon").resizable()
             .frame(width: size, height: size).scaleEffect(1.31)
             .frame(width: size, height: size).clipShape(Circle())
-            .shadow(color: .black.opacity(0.65), radius: size * 0.12, x: motion.x, y: motion.y)
+            .shadow(color: .black.opacity(castsShadow ? 0.65 : 0), radius: size * 0.12, x: motion.x, y: motion.y)
     }
 }
 
 struct CameraLensPressStyle: ButtonStyle {
+    var shadowX: CGFloat = 0
+    var shadowY: CGFloat = 6
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .background {
+                Circle().fill(AngularGradient(colors: [.teal, .blue, .purple, .indigo, .teal], center: .center))
+                    .frame(width: 64, height: 64).blur(radius: 17).opacity(configuration.isPressed ? 0.85 : 0)
+            }
+            .shadow(color: .black.opacity(configuration.isPressed ? 0 : 0.65), radius: 9, x: shadowX, y: shadowY)
             .rotationEffect(.degrees(configuration.isPressed ? 90 : 0))
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
             .contentShape(Circle())
@@ -58,7 +66,7 @@ struct Look: Codable, Identifiable, Hashable {
 }
 
 enum ToolTab: String, CaseIterable { case looks = "Looks", grain = "Grain", depth = "Depth", light = "Light", studio = "Studio", adjust = "Adjust" }
-enum Bokeh: String, Codable, CaseIterable { case soft = "Soft", disc = "Disc", ring = "Ring" }
+enum Bokeh: String, Codable, CaseIterable { case soft = "Soft", disc = "Disc", ring = "Ring", anamorphic = "Anamorphic", polygon = "Polygon" }
 enum StudioLight: String, Codable, CaseIterable { case off = "Natural", softbox = "Softbox", rembrandt = "Rembrandt", split = "Split", rim = "Rim", stage = "Stage" }
 
 struct Recipe: Codable, Equatable {
@@ -78,9 +86,48 @@ struct Recipe: Codable, Equatable {
     var farBlur = 0.0
     var focusDepth = 0.5
     var bokeh = Bokeh.soft
+    var bokehBloom = 0.0
+    var highlightSensitivity = 0.7
+    var anamorphicRatio = 2.0
+    var apertureBlades = 6.0
     var light = StudioLight.off
     var lightPower = 0.5
     var lightAngle = 0.3
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        lookID = try c.decodeIfPresent(String.self, forKey: .lookID) ?? "original"
+        bokeh = try c.decodeIfPresent(Bokeh.self, forKey: .bokeh) ?? .soft
+        light = try c.decodeIfPresent(StudioLight.self, forKey: .light) ?? .off
+        strength = try c.decodeIfPresent(Double.self, forKey: .strength) ?? 1
+        exposure = try c.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
+        temperature = try c.decodeIfPresent(Double.self, forKey: .temperature) ?? 6500
+        saturation = try c.decodeIfPresent(Double.self, forKey: .saturation) ?? 1
+        grain = try c.decodeIfPresent(Double.self, forKey: .grain) ?? 0
+        grainSize = try c.decodeIfPresent(Double.self, forKey: .grainSize) ?? 1
+        grainColor = try c.decodeIfPresent(Double.self, forKey: .grainColor) ?? 0.2
+        glow = try c.decodeIfPresent(Double.self, forKey: .glow) ?? 0
+        halation = try c.decodeIfPresent(Double.self, forKey: .halation) ?? 0
+        vignette = try c.decodeIfPresent(Double.self, forKey: .vignette) ?? 0
+        texture = try c.decodeIfPresent(Double.self, forKey: .texture) ?? 0
+        nearBlur = try c.decodeIfPresent(Double.self, forKey: .nearBlur) ?? 0
+        farBlur = try c.decodeIfPresent(Double.self, forKey: .farBlur) ?? 0
+        focusDepth = try c.decodeIfPresent(Double.self, forKey: .focusDepth) ?? 0.5
+        bokehBloom = try c.decodeIfPresent(Double.self, forKey: .bokehBloom) ?? 0
+        highlightSensitivity = try c.decodeIfPresent(Double.self, forKey: .highlightSensitivity) ?? 0.7
+        anamorphicRatio = try c.decodeIfPresent(Double.self, forKey: .anamorphicRatio) ?? 2
+        apertureBlades = try c.decodeIfPresent(Double.self, forKey: .apertureBlades) ?? 6
+        lightPower = try c.decodeIfPresent(Double.self, forKey: .lightPower) ?? 0.5
+        lightAngle = try c.decodeIfPresent(Double.self, forKey: .lightAngle) ?? 0.3
+    }
+}
+
+struct ToolGlassPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.background {
+            if configuration.isPressed { Capsule().fill(.clear).glassEffect(.regular, in: Capsule()) }
+        }
+    }
 }
 
 struct PhotoRecord: Codable, Identifiable {

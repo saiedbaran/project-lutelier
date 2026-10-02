@@ -1,0 +1,19 @@
+{
+  "patchfusion": {
+    "python": "/absolute/path/to/patchfusion-env/bin/python",
+    "repo": "/absolute/path/to/PatchFusion",
+    "checkpoint": "Zhyever/patchfusion_depth_anything_vits14",
+    "config": "configs/patchfusion_depthanything/depthanything_general.py"
+  },
+  "depth-anything-3": {
+    "python": "/absolute/path/to/da3-env/bin/python",
+    "repo": "/absolute/path/to/Depth-Anything-3",
+    "model": "/absolute/path/to/cached/DA3-SMALL",
+    "device": "cuda"
+  },
+  "depth-pro": {
+    "python": "/absolute/path/to/depth-pro-env/bin/python",
+    "repo": "/absolute/path/to/ml-depth-pro",
+    "device": "cuda"
+  }
+}

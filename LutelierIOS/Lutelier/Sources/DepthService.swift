@@ -11,17 +11,22 @@ struct DepthResult {
 
 /// Vision mattes identify people; they are never presented as metric depth.
 final class DepthService {
-    func analyze(_ image: CIImage, captured: AVDepthData? = nil) throws -> DepthResult {
+    private let localModel = LocalDepthModel()
+    func analyze(_ image: CIImage, captured: AVDepthData? = nil, suppliedDepth: CIImage? = nil, engineName: String = "Depth Anything V2") throws -> DepthResult {
         let request = VNGeneratePersonSegmentationRequest()
         request.qualityLevel = .accurate
         request.outputPixelFormat = kCVPixelFormatType_OneComponent8
         try VNImageRequestHandler(ciImage: image, options: [:]).perform([request])
         let mask = request.results?.first.map { fit(CIImage(cvPixelBuffer: $0.pixelBuffer), to: image.extent) }
-        let depth = captured.map { normalize($0, extent: image.extent) }
+        let depth: CIImage? = try captured.map { normalize($0, extent: image.extent) } ?? suppliedDepth ?? localModel.estimate(image)
         return DepthResult(subject: mask, depth: depth, explanation: depth != nil
-            ? "Captured depth • near and far planes available"
+            ? captured != nil ? "Captured depth • white is near" : "\(engineName) • estimated relative depth • white is near"
             : mask != nil ? "Portrait mask • background blur available; near depth needs a depth photo"
             : "No person or captured depth found. Try a portrait or a depth-enabled capture.")
+    }
+
+    func refineDepth(_ image: CIImage, region: CGRect, existing: CIImage, suppliedPatch: CIImage? = nil) throws -> CIImage {
+        try localModel.refine(image, region: region, existing: existing, suppliedPatch: suppliedPatch)
     }
 
     func refine(_ image: CIImage, region: CGRect, existing: CIImage) throws -> CIImage {

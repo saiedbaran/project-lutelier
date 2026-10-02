@@ -6,6 +6,7 @@ output=root.parent/'Lutelier-iOS.zip'
 with ZipFile(output,'w',ZIP_DEFLATED,compresslevel=6) as archive:
     for path in sorted(root.rglob('*')):
         if not path.is_file():continue
+        if path.name == 'config.local.json':continue
         relative=path.relative_to(root)
         if any(part in {'studio-research','__pycache__','build','DerivedData','xcuserdata'} for part in relative.parts):continue
         archive.write(path,Path('LutelierIOS')/relative)

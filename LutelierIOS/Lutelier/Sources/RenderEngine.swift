@@ -72,14 +72,14 @@ final class RenderEngine {
         if let depth {
             if let map = depth.depth.map(fitted), let planeKernel {
                 if recipe.farBlur > 0, let mask = planeKernel.apply(extent: extent, arguments: [map, recipe.focusDepth, 0.0]) {
-                    image = blur(image, mask: mask, amount: recipe.farBlur, style: recipe.bokeh)
+                    image = try blur(image, mask: mask, amount: recipe.farBlur, recipe: recipe)
                 }
                 if recipe.nearBlur > 0, let mask = planeKernel.apply(extent: extent, arguments: [map, recipe.focusDepth, 1.0]) {
-                    image = blur(image, mask: mask, amount: recipe.nearBlur, style: recipe.bokeh)
+                    image = try blur(image, mask: mask, amount: recipe.nearBlur, recipe: recipe)
                 }
             } else if let subject = depth.subject.map(fitted), recipe.farBlur > 0 {
                 let background = subject.applyingFilter("CIColorInvert")
-                image = blur(image, mask: background, amount: recipe.farBlur, style: recipe.bokeh)
+                image = try blur(image, mask: background, amount: recipe.farBlur, recipe: recipe)
             }
             if let subject = depth.subject.map(fitted), recipe.light != .off, let lightKernel {
                 let mode = Double(StudioLight.allCases.firstIndex(of: recipe.light) ?? 0)
@@ -101,12 +101,44 @@ final class RenderEngine {
         return UIImage(cgImage: cg)
     }
 
-    private func blur(_ image: CIImage, mask: CIImage, amount: Double, style: Bokeh) -> CIImage {
+    private let apertureKernel = CIKernel(source: """
+    kernel vec4 aperture(sampler image, float radius, float oval, float blades, float sensitivity, float bloom) {
+        vec4 sum = vec4(0.0);
+        for (int i = 0; i < 48; i++) {
+            float theta = float(i) * 2.39996323;
+            float r = sqrt((float(i) + 0.5) / 48.0);
+            if (blades > 2.0) {
+                float pi = 3.14159265;
+                float a = mod(theta, 2.0*pi/blades) - pi/blades;
+                r *= cos(pi/blades) / cos(a);
+            }
+            vec2 delta = vec2(cos(theta)/oval, sin(theta)) * radius * r;
+            vec4 c = sample(image, samplerTransform(image, destCoord() + delta));
+            float l = dot(c.rgb, vec3(0.2126,0.7152,0.0722));
+            float highlight = smoothstep(1.0 - sensitivity * 0.75, 1.0, l);
+            sum += vec4(c.rgb * (1.0 + bloom * highlight), c.a);
+        }
+        return sum / 48.0;
+    }
+    """)
+    private func blur(_ image: CIImage, mask: CIImage, amount: Double, recipe: Recipe) throws -> CIImage {
+        let style = recipe.bokeh
         let radius = amount * image.extent.width / 35
         let blurred: CIImage
-        if style == .soft { blurred = image.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius]) }
+        if style == .anamorphic || style == .polygon {
+            guard let output = apertureKernel?.apply(extent: image.extent, roiCallback: { _, rect in rect.insetBy(dx: -radius, dy: -radius) }, arguments: [image.clampedToExtent(), radius, style == .anamorphic ? recipe.anamorphicRatio : 1, style == .polygon ? recipe.apertureBlades.rounded() : 0, recipe.highlightSensitivity, recipe.bokehBloom]) else { throw LutelierError.message("The optical aperture renderer is unavailable on this device.") }
+            blurred = output
+        }
+        else if style == .soft { blurred = image.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius]) }
         else { blurred = image.clampedToExtent().applyingFilter("CIBokehBlur", parameters: [kCIInputRadiusKey: radius, "inputRingAmount": style == .ring ? 0.8 : 0.0, "inputRingSize": 0.1, "inputSoftness": 0.6]) }
-        return blurred.cropped(to: image.extent).applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: image, kCIInputMaskImageKey: mask]).cropped(to: image.extent)
+        var optical = blurred.cropped(to: image.extent)
+        if recipe.bokehBloom > 0 {
+            let threshold = optical.applyingFilter("CIColorControls", parameters: [kCIInputBrightnessKey: -(1 - recipe.highlightSensitivity) * 0.8, kCIInputContrastKey: 2])
+                .applyingFilter("CIBloom", parameters: [kCIInputRadiusKey: radius * 0.7, kCIInputIntensityKey: recipe.bokehBloom])
+            let blend = CIFilter.dissolveTransition(); blend.inputImage = optical; blend.targetImage = threshold; blend.time = Float(recipe.bokehBloom * 0.3)
+            optical = blend.outputImage ?? optical
+        }
+        return optical.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: image, kCIInputMaskImageKey: mask]).cropped(to: image.extent)
     }
 
     func cube(_ look: Look) throws -> Data {

@@ -1,41 +1,14 @@
-// Apple typography, transparent circular lens, motion lighting and glass look changes.
+// System typography, motion lighting and photo crossfades.
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
-let lookAnimation=null,lookCommitTimer=null,lookFinishTimer=null,lookToken=0,coverAnimations=[];
-const glassPane=document.createElement('div');glassPane.id='look-glass';glassPane.setAttribute('aria-hidden','true');$('#photo').append(glassPane);
-const incomingPhoto=document.createElement('img');incomingPhoto.className='incoming-look';incomingPhoto.alt='';glassPane.append(incomingPhoto);
-const glassSurface=document.createElement('div');glassSurface.className='cover-surface';glassPane.append(glassSurface);
+let lookAnimation=null,previousLookLayer=null;
 const oldLookAction=actions.look;
-function cancelGlass(){++lookToken;clearTimeout(lookCommitTimer);clearTimeout(lookFinishTimer);lookCommitTimer=null;lookAnimation?.cancel();coverAnimations.forEach(a=>a.cancel());coverAnimations=[];lookAnimation=null;glassPane.style.opacity='0';$('#photo').removeAttribute('aria-busy');}
-actions.look=id=>{
-  if(id===state.look&&!lookCommitTimer)return;
-  const token=++lookToken;clearTimeout(lookCommitTimer);clearTimeout(lookFinishTimer);lookAnimation?.cancel();coverAnimations.forEach(a=>a.cancel());coverAnimations=[];
-  if(reducedMotion.matches){glassPane.style.opacity='0';oldLookAction(id);return;}
-  // The cover carries the next look, not a blurred copy of the current image.
-  const target=looks.find(l=>l.id===id)||original;
-  const targetFilter=filters(target,state.strength)+fullFilter().slice(filters().length);
-  incomingPhoto.src=source;incomingPhoto.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`;
-  incomingPhoto.style.filter=targetFilter+' blur(6px)';
-  glassPane.style.opacity='1';$('#photo').setAttribute('aria-busy','true');
-  lookAnimation=glassPane.animate([
-    {transform:'perspective(850px) translate3d(-116%,12%,90px) rotateY(24deg) rotateX(9deg) rotateZ(-6deg) scale(1.025)',opacity:0},
-    {transform:'perspective(850px) translate3d(-64%,5%,60px) rotateY(16deg) rotateX(5deg) rotateZ(-3deg) scale(1.02)',opacity:.7,offset:.2},
-    {transform:'perspective(850px) translate3d(0,0,0) rotateY(0deg) rotateX(0deg) rotateZ(0deg) scale(1)',opacity:1,offset:.48},
-    {transform:'perspective(850px) translate3d(0,0,0) rotateY(0deg) rotateX(0deg) rotateZ(0deg) scale(1)',opacity:1,offset:.87},
-    {transform:'perspective(850px) translate3d(0,0,0) rotateY(0deg) rotateX(0deg) rotateZ(0deg) scale(1)',opacity:0}
-  ],{duration:1250,easing:'cubic-bezier(.24,.68,.2,1)',fill:'forwards'});
-  coverAnimations.push(incomingPhoto.animate([
-    {filter:targetFilter+' blur(6px)',opacity:.4},
-    {filter:targetFilter+' blur(6px)',opacity:.88,offset:.48},
-    {filter:targetFilter+' blur(0px)',opacity:1,offset:.82},
-    {filter:targetFilter+' blur(0px)',opacity:1}
-  ],{duration:1250,easing:'ease-in-out',fill:'forwards'}));
-  coverAnimations.push(glassSurface.animate([{opacity:1},{opacity:1,offset:.48},{opacity:0,offset:.9},{opacity:0}],{duration:1250,fill:'forwards'}));
-  lookCommitTimer=setTimeout(()=>{if(token!==lookToken)return;lookCommitTimer=null;oldLookAction(id);},1000);
-  lookFinishTimer=setTimeout(()=>{if(token!==lookToken)return;glassPane.style.opacity='0';lookAnimation?.cancel();coverAnimations.forEach(a=>a.cancel());coverAnimations=[];lookAnimation=null;$('#photo').removeAttribute('aria-busy');},1280);
-};
+function cancelGlass(){lookAnimation?.cancel();lookAnimation=null;previousLookLayer?.remove();previousLookLayer=null;}
+actions.look=id=>{if(id===state.look)return;cancelGlass();if(!reducedMotion.matches){
+  previousLookLayer=document.createElement('div');previousLookLayer.className='previous-look';previousLookLayer.setAttribute('aria-hidden','true');
+  for(const selector of ['#edited','#bloom','#noise','#vignette','#relight']){const original=$(selector);if(!original)continue;const clone=original.cloneNode(),style=getComputedStyle(original);clone.removeAttribute('id');for(const key of ['position','inset','width','height','object-fit','object-position','opacity','filter','transform','transform-origin','background','background-size','mix-blend-mode','z-index'])clone.style.setProperty(key,style.getPropertyValue(key));previousLookLayer.append(clone);}
+  $('#photo').append(previousLookLayer);
+}oldLookAction(id);if(previousLookLayer){const layer=previousLookLayer;lookAnimation=layer.animate([{opacity:1},{opacity:0}],{duration:360,easing:'ease-in-out',fill:'forwards'});lookAnimation.finished.then(()=>{layer.remove();if(previousLookLayer===layer)previousLookLayer=null;}).catch(()=>{});}};
 for(const name of ['undo','redo','reset','import','open-photo','shutter']){const action=actions[name];actions[name]=(...args)=>{cancelGlass();return action(...args)};}
-document.addEventListener('pointerdown',e=>{if(e.target.matches('[data-range]'))cancelGlass();});
-document.addEventListener('keydown',e=>{if(e.target.matches('[data-range]'))cancelGlass();});
 const oldMenu=actions.menu;actions.menu=()=>{oldMenu();const b=document.createElement('button');b.dataset.action='enable-tilt';b.textContent='Enable tilt shadow';$('#screen .modal-menu').append(b);};
 // Crop the existing bitmap in the view: no changes to the original icon asset.
 $$('.brand img').forEach(img=>{const lens=document.createElement('span');lens.className='lens-mark';img.replaceWith(lens);lens.append(img);});
@@ -81,7 +54,7 @@ function cancelCameraContact(){clearTimeout(cameraOpenTimer);cameraOpenTimer=nul
 function cameraContains(e){const r=rotatingCamera.getBoundingClientRect();return Math.hypot(e.clientX-(r.left+r.width/2),e.clientY-(r.top+r.height/2))<=Math.min(r.width,r.height)/2;}
 rotatingCamera.addEventListener('pointerdown',e=>{if(!e.isPrimary||e.button!==0)return;clearTimeout(cameraOpenTimer);cameraContact={id:e.pointerId,active:true,cancelled:false,started:performance.now()};rotatingCamera.classList.add('camera-pressed');rotatingCamera.setPointerCapture(e.pointerId);});
 rotatingCamera.addEventListener('pointermove',e=>{if(cameraContact?.active&&e.pointerId===cameraContact.id&&!cameraContains(e))cancelCameraContact();});
-rotatingCamera.addEventListener('pointerup',e=>{if(e.pointerId!==cameraContact?.id)return;cameraContact.active=false;if(!cameraContains(e))cancelCameraContact();if(rotatingCamera.hasPointerCapture(e.pointerId))rotatingCamera.releasePointerCapture(e.pointerId);});
+rotatingCamera.addEventListener('pointerup',e=>{if(e.pointerId!==cameraContact?.id)return;cameraContact.active=false;rotatingCamera.classList.remove('camera-pressed');if(!cameraContains(e))cancelCameraContact();if(rotatingCamera.hasPointerCapture(e.pointerId))rotatingCamera.releasePointerCapture(e.pointerId);});
 rotatingCamera.addEventListener('pointercancel',e=>{if(e.pointerId===cameraContact?.id){cameraContact.active=false;cancelCameraContact();}});
 rotatingCamera.addEventListener('lostpointercapture',()=>{if(cameraContact?.active){cameraContact.active=false;cancelCameraContact();}});
 rotatingCamera.addEventListener('click',e=>{if(e.detail===0&&cameraContact?.cancelled)cameraContact=null;if(cameraContact?.cancelled){e.preventDefault();e.stopImmediatePropagation();cameraContact=null;return;}if(!cameraContact){cameraContact={active:false,cancelled:false,started:performance.now()};rotatingCamera.classList.add('camera-pressed');}},{capture:true});

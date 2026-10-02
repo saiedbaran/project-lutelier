@@ -93,5 +93,15 @@ credits=(root/'STUDIO-CREDITS.md').read_text(encoding='utf-8')
 check(all(x['sourceURL'] in credits for x in studio),'Every bundled Studio photo appears in the credits')
 check(any(x.get('path')=='Lutelier/Resources/Studio' for x in objects.values()),'Xcode project includes Studio resource folder')
 report.update(checks=len(checks),studio_references=len(studio),studio_categories=dict(Counter(x['category'] for x in studio)),studio_megabytes=round(sum((studio_directory/x['file']).stat().st_size for x in studio)/1024**2,2),minimum_ios='27.0',studio_native_generation='Not tested: needs supported iOS 27 Apple Intelligence device')
+model=root/'Lutelier/Resources/Models/DepthAnythingV2SmallF16.mlpackage'
+model_manifest=json.loads((model/'Manifest.json').read_text())
+check(bool(model_manifest['itemInfoEntries']),'Core ML package manifest has model entries')
+for entry in model_manifest['itemInfoEntries'].values():
+    check((model/'Data'/entry['path']).exists(),'Core ML model package resource exists')
+weights=model/'Data/com.apple.CoreML/weights/weight.bin'
+check(weights.stat().st_size>40_000_000,'Depth model weights are bundled')
+check(any(x.get('path')=='Lutelier/Resources/Models' for x in objects.values()),'Xcode includes depth model folder')
+check('Apache License' in (model.parent/'LICENSE-DepthAnything.txt').read_text(),'Small model license bundled')
+report.update(checks=len(checks),depth_model='DepthAnythingV2SmallF16',depth_weights_sha256=hashlib.sha256(weights.read_bytes()).hexdigest(),depth_inference='Not run: needs Core ML on Apple hardware')
 (root/'validation-report.json').write_text(json.dumps(report,indent=2))
 print(json.dumps(report,indent=2))

@@ -18,6 +18,13 @@ final class EditorStore: ObservableObject {
     @Published var depthStatus = "Analyze a portrait to unlock depth tools"
     @Published var hasDepth = false
     @Published var hasSubject = false
+    @Published var depthPreview: UIImage?
+    @Published var selectedDepthEngine: DepthEngine = .device
+    @Published var companionAddress = ""
+    @Published var companionToken = ""
+    @Published var companionEngines: Set<String> = []
+    @Published var companionStatus = "Optional local-computer inference • connect before selecting an engine"
+    private let researchDepth = ResearchDepthClient()
     @Published var busy = false
     @Published var error: String?
     @Published var message: String?
@@ -96,7 +103,7 @@ final class EditorStore: ObservableObject {
             let base = try await render(image, recipe: Recipe(), look: .original, depth: nil, max: 1800)
             guard ticket == generation else { return }
             original = image; originalPreview = base; preview = base; renderedLookID = "original"
-            selectedPhotoID = record.id; recipe = record.recipe; depth = nil
+            selectedPhotoID = record.id; recipe = record.recipe; depth = nil; depthPreview = nil
             hasDepth = false; hasSubject = false; history = []; future = []; thumbnails = [:]
             depthStatus = "Analyze a portrait to unlock depth tools"
             var captureAnalyzed = false
@@ -114,7 +121,10 @@ final class EditorStore: ObservableObject {
             if let savedDepth = CIImage(contentsOf: documents.appendingPathComponent(record.id.uuidString + "-depth.png")) {
                 if depth == nil { depth = DepthResult(subject: nil, depth: savedDepth, explanation: "Saved captured depth") }
                 else { depth?.depth = savedDepth }
-                hasDepth = true; depthStatus = "Captured depth • near and far planes available"
+                hasDepth = true; depthStatus = "Saved depth • near and far planes available"
+                let texture = try await render(savedDepth, recipe: Recipe(), look: .original, depth: nil, max: 1800)
+                guard ticket == generation else { return }
+                depthPreview = texture
             }
             if let mask = CIImage(contentsOf: documents.appendingPathComponent(record.id.uuidString + "-mask.png")) {
                 if depth == nil { depth = DepthResult(subject: mask, depth: nil, explanation: "Saved portrait mask") }
@@ -193,18 +203,40 @@ final class EditorStore: ObservableObject {
         if let image = try? await render(original, recipe: settings, look: look, depth: nil, max: 160), selectedPhotoID == photo { thumbnails[look.id] = image }
     }
 
-    func analyze(captured: AVDepthData? = nil, persistMask: Bool = true) async {
+    func connectDepthCompanion() async {
+        let address = companionAddress, token = companionToken
+        companionEngines = []
+        selectedDepthEngine = .device
+        companionStatus = "Connecting…"
+        do {
+            let capabilities = try await researchDepth.capabilities(address: address, token: token)
+            guard companionAddress == address, companionToken == token else { return }
+            companionEngines = Set(capabilities.filter(\.configured).map(\.id))
+            companionStatus = companionEngines.isEmpty ? "Connected • no engines configured" : "Connected • \(companionEngines.count) configured engines • inference requires installed weights"
+        } catch { if companionAddress == address && companionToken == token { companionStatus = error.localizedDescription } }
+    }
+
+    func analyze(captured: AVDepthData? = nil, persistMask: Bool = true, useSelectedEngine: Bool = false) async {
         guard let original else { return }
         busy = true
+        defer { busy = false }
         let photo = selectedPhotoID, service = depthService
         do {
             let retainedDepth = depth?.depth
+            // Automatic capture analysis remains on-device. External inference requires a user action.
+            let method = useSelectedEngine && captured == nil ? selectedDepthEngine : .device
+            let supplied: CIImage? = method == .device ? nil : try await researchDepth.estimate(original, engine: method, address: companionAddress, token: companionToken)
             var result: DepthResult = try await withCheckedThrowingContinuation { continuation in
-                worker.async { continuation.resume(with: Result { try service.analyze(original, captured: captured) }) }
+                worker.async { continuation.resume(with: Result { try service.analyze(original, captured: captured, suppliedDepth: supplied, engineName: method.name) }) }
             }
             guard selectedPhotoID == photo else { return }
             if result.depth == nil, let retainedDepth { result.depth = retainedDepth; result.explanation = "Captured depth • portrait mask updated" }
             depth = result; hasDepth = result.depth != nil; hasSubject = result.subject != nil; depthStatus = result.explanation
+            if let map = result.depth {
+                let texture = try await render(map, recipe: Recipe(), look: .original, depth: nil, max: 1800)
+                guard selectedPhotoID == photo else { return }
+                depthPreview = texture
+            }
             if persistMask, let mask = result.subject { try await saveMask(mask, photo: photo) }
             if let depth = result.depth { try await saveMask(depth, photo: photo, suffix: "-depth", format: .RGBA16) }
             scheduleRender()
@@ -212,17 +244,25 @@ final class EditorStore: ObservableObject {
         busy = false
     }
     func refine(normalized region: CGRect) async {
-        guard let original, let existing = depth?.subject else { return }
+        guard let original, let existing = depth?.depth else { return }
         busy = true
+        defer { busy = false }
         let photo = selectedPhotoID, service = depthService
         let crop = CGRect(x: region.minX * original.extent.width, y: (1 - region.maxY) * original.extent.height, width: region.width * original.extent.width, height: region.height * original.extent.height)
         do {
+            let method = selectedDepthEngine
+            let selection = crop.intersection(original.extent)
+            let support = selection.insetBy(dx: -selection.width * 0.2, dy: -selection.height * 0.2).intersection(original.extent)
+            let supplied: CIImage? = method == .device ? nil : try await researchDepth.estimate(original.cropped(to: support), engine: method, address: companionAddress, token: companionToken)
             let mask: CIImage = try await withCheckedThrowingContinuation { continuation in
-                worker.async { continuation.resume(with: Result { try service.refine(original, region: crop, existing: existing) }) }
+                worker.async { continuation.resume(with: Result { try service.refineDepth(original, region: crop, existing: existing, suppliedPatch: supplied) }) }
             }
             guard selectedPhotoID == photo else { return }
-            depth?.subject = mask; depthStatus = "Portrait edges refined in the selected area • inspect hair at 100%"
-            try await saveMask(mask, photo: photo)
+            depth?.depth = mask; depthStatus = "\(method.name) crop refined • scale aligned and seam feathered • inspect fine edges"
+            let texture = try await render(mask, recipe: Recipe(), look: .original, depth: nil, max: 1800)
+            guard selectedPhotoID == photo else { return }
+            depthPreview = texture
+            try await saveMask(mask, photo: photo, suffix: "-depth", format: .RGBA16)
             scheduleRender()
         } catch { self.error = error.localizedDescription }
         busy = false

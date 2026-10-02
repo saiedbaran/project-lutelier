@@ -3,20 +3,23 @@ import PhotosUI
 import UniformTypeIdentifiers
 import UIKit
 
+private struct ToolTabFrames: PreferenceKey {
+    static var defaultValue: [ToolTab: CGRect] = [:]
+    static func reduce(value: inout [ToolTab: CGRect], nextValue: () -> [ToolTab: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, new in new }) }
+}
+
 struct EditorView: View {
+    @Namespace private var toolSelection
+    @State private var tabFrames: [ToolTab: CGRect] = [:]
+    @GestureState private var hoveredTab: ToolTab?
     @StateObject private var store = EditorStore()
     @StateObject private var studio = StudioStore()
     @StateObject private var lensMotion = LensMotion()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @State private var glassVisible = false
-    @State private var glassPosition: CGFloat = -1.08
-    @State private var glassNextImage: UIImage?
-    @State private var glassTilt = 24.0
-    @State private var glassOpacity = 1.0
-    @State private var glassImageOpacity = 0.4
-    @State private var glassBlur: CGFloat = 6
-    @State private var glassFrost = 1.0
+    @State private var showDepthTexture = false
+    @State private var selectingDepth = false
+    @State private var depthSelection: CGRect?
     @State private var pendingLookID: String?
     @State private var lookTransition: Task<Void, Never>?
     @State private var picker: PhotosPickerItem?
@@ -37,53 +40,28 @@ struct EditorView: View {
             ZStack {
                 Palette.ink.ignoresSafeArea()
                 if let image = store.preview {
-                    Image(uiImage: image).resizable().scaledToFill().frame(width: geometry.size.width, height: geometry.size.height).blur(radius: 65).opacity(0.25).clipped().ignoresSafeArea()
+                    GeometryReader { backdrop in
+                        Image(uiImage: image).resizable().scaledToFill().frame(width: backdrop.size.width, height: backdrop.size.height).blur(radius: 65).scaleEffect(1.15).opacity(0.3)
+                    }.ignoresSafeArea().allowsHitTesting(false)
                 }
                 VStack(spacing: 14) {
                     header
                     if let image = store.preview {
                         ZStack(alignment: .bottom) {
                             if compare, let original = store.originalPreview { ComparisonPhoto(before: original, after: image) }
-                            else { ZoomPhoto(image: image, visibleRegion: $visibleRegion).id(store.selectedPhotoID) }
+                            else { ZoomPhoto(image: showDepthTexture ? (store.depthPreview ?? image) : image, visibleRegion: $visibleRegion).id(store.selectedPhotoID) }
+                            if selectingDepth && tab == .depth && !compare { DepthSelectionOverlay(image: image, visibleRegion: visibleRegion, selection: $depthSelection) }
+                            if showDepthTexture { VStack { Text(store.depthPreview == nil ? "Estimate depth first" : "Relative depth • white is near").font(.caption2).padding(8).background(.black.opacity(0.65), in: Capsule()); Spacer() }.padding(12).allowsHitTesting(false) }
                             HStack(spacing: 8) {
                                 Text(compare ? "Slide to compare" : "Pinch to explore").font(.caption2).foregroundStyle(.secondary)
                                 Spacer()
                                 Text(store.currentLook.name).font(.caption.weight(.medium))
-                            }.padding(12).background(.ultraThinMaterial, in: Capsule()).padding(14).allowsHitTesting(false)
+                            }.padding(12).background(.ultraThinMaterial, in: Capsule()).padding(14).allowsHitTesting(false).zIndex(50)
                         }
-                        .overlay {
-                            if glassVisible {
-                                GeometryReader { size in
-                                    ZStack {
-                                        if let glassNextImage {
-                                            let fit = min(size.size.width / glassNextImage.size.width, size.size.height / glassNextImage.size.height)
-                                            let zoom = max(1, max(1 / max(visibleRegion.width, 0.125), 1 / max(visibleRegion.height, 0.125)))
-                                            Image(uiImage: glassNextImage).resizable().scaledToFit()
-                                                .frame(width: size.size.width, height: size.size.height)
-                                                .scaleEffect(zoom)
-                                                .offset(x: glassNextImage.size.width * fit * zoom * (0.5 - visibleRegion.midX), y: glassNextImage.size.height * fit * zoom * (0.5 - visibleRegion.midY))
-                                                .blur(radius: glassBlur).opacity(glassImageOpacity)
-                                        }
-                                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                            .fill(.white.opacity(0.025))
-                                            .glassEffect(.clear, in: .rect(cornerRadius: 24))
-                                            .overlay { RoundedRectangle(cornerRadius: 24).stroke(.white.opacity(0.45), lineWidth: 0.7) }
-                                            .opacity(glassFrost)
-                                    }
-                                        .frame(width: size.size.width, height: size.size.height).clipShape(.rect(cornerRadius: 24))
-                                        .rotation3DEffect(.degrees(glassTilt), axis: (x: 0, y: 1, z: 0), perspective: 0.65)
-                                        .rotation3DEffect(.degrees(glassTilt * 0.38), axis: (x: 1, y: 0, z: 0), perspective: 0.65)
-                                        .rotationEffect(.degrees(-glassTilt * 0.25))
-                                        .scaleEffect(1 + glassTilt / 960)
-                                        .offset(x: size.size.width * glassPosition)
-                                        .offset(y: size.size.height * glassPosition * -0.1)
-                                        .shadow(color: .black.opacity(0.3), radius: glassTilt * 0.5, y: glassTilt * 0.4)
-                                        .opacity(glassOpacity)
-                                }.allowsHitTesting(false).accessibilityHidden(true)
-                            }
-                        }.clipShape(.rect(cornerRadius: 24))
+                        .clipShape(.rect(cornerRadius: (geometry.size.width - 32) * 0.09, style: .continuous))
+                        .background { Image(uiImage: image).resizable().scaledToFill().blur(radius: 35).opacity(0.45).scaleEffect(1.08).allowsHitTesting(false) }
                     } else { welcome }
-                    if store.hasPhoto { inspector.frame(height: min(geometry.size.height * 0.36, 320)) }
+                    if store.hasPhoto { inspector.frame(height: tab == .studio ? 185 : tab == .adjust ? 240 : min(geometry.size.height * (tab == .looks ? 0.43 : 0.34), tab == .looks ? 340 : 290)) }
                     bottomBar
                 }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
                 if store.busy { ProgressView().padding(22).lutelierGlass().accessibilityLabel("Processing photograph") }
@@ -96,7 +74,8 @@ struct EditorView: View {
         .onChange(of: scenePhase) { _, phase in if phase == .active && !reduceMotion { lensMotion.start() } else { lensMotion.stop() } }
         .onChange(of: reduceMotion) { _, reduced in if reduced { lensMotion.stop(); cancelLookTransition() } else if scenePhase == .active { lensMotion.start() } }
         .onChange(of: store.renderedLookID) { _, value in if value == pendingLookID { finishLookTransition() } }
-        .onChange(of: store.selectedPhotoID) { _, _ in cancelLookTransition() }
+        .onChange(of: store.selectedPhotoID) { _, _ in cancelLookTransition(); depthSelection = nil; selectingDepth = false; showDepthTexture = false }
+        .onChange(of: tab) { _, value in if value != .depth { selectingDepth = false; showDepthTexture = false } }
         .onChange(of: store.error) { _, error in if error != nil { cancelLookTransition() } }
         .task(id: picker) { if let picker { await store.importPhoto(picker) } }
         .sheet(isPresented: $showCamera) { CaptureView { result in showCamera = false; Task { await store.receiveCapture(result) } } }
@@ -115,7 +94,7 @@ struct EditorView: View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("LUTELIER").font(.system(size: 22, weight: .heavy, design: .default)).tracking(0.8)
-                Text("THE ART OF A PHOTOGRAPH").font(.system(size: 8, weight: .medium)).tracking(2).foregroundStyle(.secondary)
+                Text("THE ART OF PHOTOGRAPHY").font(.system(size: 8, weight: .medium)).tracking(2).foregroundStyle(.secondary)
             }
             Spacer()
             if store.hasPhoto {
@@ -142,78 +121,51 @@ struct EditorView: View {
     }
     private func feature(_ text: String, icon: String) -> some View { Label(text, systemImage: icon).font(.caption).padding(.horizontal, 14).padding(.vertical, 10).lutelierGlass() }
 
-    private func cancelLookTransition() {
-        lookTransition?.cancel(); pendingLookID = nil; glassVisible = false; glassPosition = -1.16; glassNextImage = nil
-    }
-    private func selectLook(_ look: Look) {
-        guard look.id != store.recipe.lookID || pendingLookID != nil else { return }
-        cancelLookTransition()
-        guard !reduceMotion else { store.select(look); return }
-        pendingLookID = look.id
-        let photoID = store.selectedPhotoID
-        let startingRecipe = store.recipe
-        lookTransition = Task { @MainActor in
-            do {
-                let prepared = try await store.prepareLook(look)
-                try Task.checkCancellation()
-                guard store.selectedPhotoID == photoID, pendingLookID == look.id else { return }
-                guard store.recipe == startingRecipe else { cancelLookTransition(); return }
-                glassNextImage = prepared.image; glassPosition = -1.16; glassTilt = 24
-                glassOpacity = 1; glassImageOpacity = 0.4; glassBlur = 6; glassFrost = 1; glassVisible = true
-                try await Task.sleep(for: .milliseconds(16))
-                withAnimation(.easeInOut(duration: 0.6)) { glassPosition = 0; glassTilt = 0; glassImageOpacity = 0.88 }
-                try await Task.sleep(for: .milliseconds(620))
-                try Task.checkCancellation()
-                withAnimation(.easeInOut(duration: 0.4)) { glassBlur = 0; glassImageOpacity = 1; glassFrost = 0 }
-                try await Task.sleep(for: .milliseconds(410))
-                try Task.checkCancellation()
-                guard store.recipe == startingRecipe else { cancelLookTransition(); return }
-                store.applyPreparedLook(image: prepared.image, recipe: prepared.recipe)
-                if store.renderedLookID == look.id { finishLookTransition() }
-            } catch is CancellationError {} catch { cancelLookTransition(); store.error = error.localizedDescription }
-        }
-    }
-    private func finishLookTransition() {
-        guard pendingLookID != nil else { return }
-        lookTransition?.cancel()
-        lookTransition = Task { @MainActor in
-            do {
-                withAnimation(.easeInOut(duration: 0.2)) { glassOpacity = 0 }
-                try await Task.sleep(for: .milliseconds(220))
-                try Task.checkCancellation()
-                glassVisible = false; pendingLookID = nil; glassNextImage = nil
-            } catch {}
-        }
-    }
+    private func cancelLookTransition() { lookTransition?.cancel(); pendingLookID = nil }
+    private func selectLook(_ look: Look) { cancelLookTransition(); store.select(look) }
+    private func finishLookTransition() { pendingLookID = nil }
 
     private var bottomBar: some View {
         HStack(spacing: 14) {
             HStack {
             Button { showLibrary = true } label: { Image(systemName: "square.grid.2x2").frame(width: 44, height: 44) }.accessibilityLabel("Photo library")
             PhotosPicker(selection: $picker, matching: .images, photoLibrary: .shared()) { Image(systemName: "photo.badge.plus").frame(width: 44, height: 44) }.accessibilityLabel("Import photo")
-            Spacer(minLength: 0)
             if store.hasPhoto {
                 Button { withAnimation(.easeInOut(duration: 0.2)) { compare.toggle() } } label: { Image(systemName: "rectangle.lefthalf.inset.filled").frame(width: 44, height: 44).foregroundStyle(compare ? Palette.amber : .white) }.accessibilityLabel("Compare original and edit")
                 Button { Task { await store.export() } } label: { Image(systemName: "square.and.arrow.up").frame(width: 44, height: 44).background(Palette.amber, in: Circle()).foregroundStyle(Palette.ink) }.disabled(store.busy).accessibilityLabel("Save edit to Photos")
             }
-            }.padding(6).glassEffect(.regular, in: .rect(cornerRadius: 34, style: .continuous))
+            }.fixedSize(horizontal: true, vertical: false).padding(6).glassEffect(.regular, in: .rect(cornerRadius: 34, style: .continuous))
+            Spacer(minLength: 14)
             Button { showCamera = true } label: {
-                LensLogo(motion: lensMotion, size: 68)
-            }.buttonStyle(CameraLensPressStyle()).accessibilityLabel("Capture")
-        }.foregroundStyle(.white).buttonStyle(.plain)
+                LensLogo(motion: lensMotion, size: 68, castsShadow: false)
+            }.buttonStyle(CameraLensPressStyle(shadowX: lensMotion.x, shadowY: lensMotion.y)).accessibilityLabel("Capture")
+        }.frame(maxWidth: .infinity).foregroundStyle(.white).buttonStyle(ToolGlassPressStyle())
     }
 
     private var inspector: some View {
         VStack(spacing: 12) {
-            ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 4) {
+            GeometryReader { tabsGeometry in HStack(spacing: 0) {
                 ForEach(ToolTab.allCases, id: \.self) { item in
-                    Button { tab = item } label: {
-                        Text(item.rawValue).font(.caption.weight(.semibold)).padding(.horizontal, 13).padding(.vertical, 11)
-                            .background(tab == item ? .white.opacity(0.12) : .clear, in: Capsule())
-                            .foregroundStyle(tab == item ? Palette.amber : .secondary)
+                    Button { withAnimation(.snappy(duration: 0.22)) { tab = item } } label: {
+                        Text(item.rawValue).font(.caption.weight((hoveredTab ?? tab) == item ? .bold : .regular)).frame(width: tabsGeometry.size.width / CGFloat(ToolTab.allCases.count)).padding(.vertical, 11)
+                            .background {
+                                if (hoveredTab ?? tab) == item { Capsule().fill(.clear).glassEffect(.regular, in: Capsule()).matchedGeometryEffect(id: "tool-selection", in: toolSelection) }
+                            }
+                            .foregroundStyle((hoveredTab ?? tab) == item ? Palette.amber : .secondary)
                     }.buttonStyle(.plain)
+                    .background(GeometryReader { cell in Color.clear.preference(key: ToolTabFrames.self, value: [item: cell.frame(in: .named("tool-tabs"))]) })
                 }
-            } }
+            }.coordinateSpace(name: "tool-tabs")
+                .onPreferenceChange(ToolTabFrames.self) { tabFrames = $0 }
+                .animation(reduceMotion ? nil : .interactiveSpring(response: 0.2, dampingFraction: 0.85), value: hoveredTab)
+                .highPriorityGesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("tool-tabs")).updating($hoveredTab) { value, hovering, _ in
+                    hovering = tabFrames.first(where: { $0.value.insetBy(dx: 0, dy: -12).contains(value.location) })?.key
+                }.onEnded { value in
+                    if let item = tabFrames.first(where: { $0.value.insetBy(dx: 0, dy: -12).contains(value.location) })?.key {
+                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) { tab = item }
+                    }
+                })
+            }.frame(height: 38)
             if tab == .looks { lookControls }
             else {
                 ScrollView {
@@ -230,14 +182,21 @@ struct EditorView: View {
                             control("Halation", key: \.halation, range: 0...1)
                             control("Vignette", key: \.vignette, range: 0...1)
                         case .depth:
+                            depthEngineControls
                             Text(store.depthStatus).font(.caption).foregroundStyle(.secondary)
-                            Button("Analyze portrait") { Task { await store.analyze() } }.disabled(store.busy)
+                            Button("Estimate scene depth") { Task { await store.analyze(useSelectedEngine: true) } }.disabled(store.busy)
                             Picker("Bokeh", selection: Binding(get: { store.recipe.bokeh }, set: { value in store.edit { $0.bokeh = value } })) { ForEach(Bokeh.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
                             control("Far blur", key: \.farBlur, range: 0...1).disabled(!store.hasSubject && !store.hasDepth)
                             control("Near blur", key: \.nearBlur, range: 0...1).disabled(!store.hasDepth)
                             control("Focus plane", key: \.focusDepth, range: 0...1).disabled(!store.hasDepth)
-                            Button { Task { await store.refine(normalized: visibleRegion) } } label: { Label("Refine visible portrait edges", systemImage: "viewfinder") }.disabled(!store.hasSubject || store.busy || visibleRegion.width > 0.8)
-                            Text("Pinch to zoom into hair or an edge, then refine. Portrait masks estimate subject boundaries; captured depth enables separate near and far planes.").font(.caption2).foregroundStyle(.secondary)
+                            if store.recipe.bokeh == .anamorphic { control("Oval ratio", key: \.anamorphicRatio, range: 1...3) }
+                            if store.recipe.bokeh == .polygon { control("Aperture blades", key: \.apertureBlades, range: 3...9) }
+                            control("Background bloom", key: \.bokehBloom, range: 0...1)
+                            control("Highlight sensitivity", key: \.highlightSensitivity, range: 0...1)
+                            Toggle("Show depth texture", isOn: $showDepthTexture).disabled(!store.hasDepth)
+                            Toggle("Box select region", isOn: $selectingDepth)
+                            Button { guard let region = depthSelection else { return }; Task { await store.refine(normalized: region) } } label: { Label("Refine selected depth", systemImage: "viewfinder") }.disabled(!store.hasDepth || store.busy || depthSelection == nil)
+                            Text("Draw a box over an edge. Local crop inference aligns with the global map and preserves depth outside the selection. Fine hair may still need a portrait matte.").font(.caption2).foregroundStyle(.secondary)
                         case .light:
                             Text("Your pocket studio").font(.headline)
                             ScrollView(.horizontal, showsIndicators: false) { HStack { ForEach(StudioLight.allCases, id: \.self) { light in Button(light.rawValue) { store.edit { $0.light = light } }.buttonStyle(.bordered).tint(store.recipe.light == light ? Palette.amber : .gray) } } }
@@ -267,13 +226,48 @@ struct EditorView: View {
             }
         }.padding(14).lutelierGlass()
     }
+    private var depthEngineControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Depth engine").font(.caption.weight(.bold))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(DepthEngine.allCases) { method in
+                        Button(method.name) { store.selectedDepthEngine = method }
+                            .buttonStyle(.bordered).tint(store.selectedDepthEngine == method ? Palette.amber : .gray)
+                            .disabled(store.busy || (method != .device && !store.companionEngines.contains(method.rawValue)))
+                    }
+                }
+            }
+            DisclosureGroup("Advanced models · local computer") {
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("http://192.168.1.20:8770", text: $store.companionAddress).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                        .onChange(of: store.companionAddress) { _, _ in store.companionEngines = []; store.selectedDepthEngine = .device }
+                    SecureField("Companion token", text: $store.companionToken).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .onChange(of: store.companionToken) { _, _ in store.companionEngines = []; store.selectedDepthEngine = .device }
+                    Button("Connect to companion") { Task { await store.connectDepthCompanion() } }.disabled(store.busy)
+                    Text(store.companionStatus).font(.caption2).foregroundStyle(.secondary)
+                    Text("Estimate sends this photo; Refine sends the selected crop with context. Models run on your computer. HTTP uses your trusted local network. Credentials are kept only for this session.").font(.caption2).foregroundStyle(.secondary)
+                    Text("Research watchlist: PatchRefiner V2 (ICLR 2026) · PRO (ICCV 2025) · PromptDA (CVPR 2025) · Marigold. These need separate adapters or calibrated LiDAR; PRO requires commercial permission. See DEPTH-REFINEMENT.md.").font(.caption2).foregroundStyle(.secondary)
+                }.padding(.top, 8)
+            }.font(.caption)
+        }
+    }
+
     private var lookControls: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 6) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search film, camera, or mood", text: $query).font(.caption)
-                Menu { ForEach(["All"] + Array(Set(store.looks.map(\.category))).filter { $0 != "All" }.sorted(), id: \.self) { item in Button(item) { category = item } } } label: { Text(category).font(.caption).lineLimit(1); Image(systemName: "line.3.horizontal.decrease") }
             }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(["All"] + Array(Set(store.looks.map(\.category))).filter { $0 != "All" }.sorted(), id: \.self) { item in
+                        Button(item) { category = item }.font(.caption.weight(category == item ? .bold : .regular)).padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(category == item ? Palette.amber.opacity(0.18) : .white.opacity(0.06), in: Capsule())
+                            .foregroundStyle(category == item ? Palette.amber : .secondary)
+                    }
+                }
+            }.frame(height: 34)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 10) {
                     ForEach(filteredLooks) { look in
@@ -290,8 +284,8 @@ struct EditorView: View {
                     }
                 }.padding(2)
             }
-            control("Strength", key: \.strength, range: 0...1)
-            Text(store.currentLook.description).font(.caption2).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
+            GlassStrengthSlider(value: store.slider(\.strength), onEditingChanged: { if $0 { store.beginSlider() } else { store.endSlider() } })
         }
     }
     private func control(_ name: String, key: WritableKeyPath<Recipe, Double>, range: ClosedRange<Double>) -> some View {

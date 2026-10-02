@@ -19,7 +19,10 @@ struct ZoomPhoto: UIViewRepresentable {
     }
     func updateUIView(_ scroll: UIScrollView, context: Context) {
         context.coordinator.parent = self
-        context.coordinator.imageView.image = image
+        if context.coordinator.imageView.image !== image {
+            if UIAccessibility.isReduceMotionEnabled { context.coordinator.imageView.image = image }
+            else { UIView.transition(with: context.coordinator.imageView, duration: 0.36, options: [.transitionCrossDissolve, .allowAnimatedContent, .beginFromCurrentState]) { context.coordinator.imageView.image = image } }
+        }
         DispatchQueue.main.async {
             guard scroll.bounds.width > 0, scroll.bounds.height > 0 else { return }
             let scale = min(scroll.bounds.width / image.size.width, scroll.bounds.height / image.size.height)
@@ -58,6 +61,34 @@ struct ZoomPhoto: UIViewRepresentable {
                 let width = scroll.bounds.width / 3, height = scroll.bounds.height / 3
                 scroll.zoom(to: CGRect(x: p.x - width / 2, y: p.y - height / 2, width: width, height: height), animated: true)
             }
+        }
+    }
+}
+
+struct DepthSelectionOverlay: View {
+    let image: UIImage
+    let visibleRegion: CGRect
+    @Binding var selection: CGRect?
+    @State private var start: CGPoint?
+    @State private var drawn: CGRect?
+    var body: some View {
+        GeometryReader { geometry in
+            let fit = min(geometry.size.width / image.size.width, geometry.size.height / image.size.height)
+            let zoom = max(1, max(1 / max(visibleRegion.width, 0.125), 1 / max(visibleRegion.height, 0.125)))
+            let width = image.size.width * fit * zoom, height = image.size.height * fit * zoom
+            let origin = CGPoint(x: geometry.size.width / 2 - visibleRegion.midX * width, y: geometry.size.height / 2 - visibleRegion.midY * height)
+            ZStack(alignment: .topLeading) {
+                Color.clear
+                if let drawn { Rectangle().fill(Palette.amber.opacity(0.12)).overlay(Rectangle().stroke(Palette.amber, lineWidth: 1.5)).frame(width: drawn.width, height: drawn.height).offset(x: drawn.minX, y: drawn.minY) }
+            }.contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                if start == nil { start = value.startLocation }
+                let a = start!, b = value.location
+                let box = CGRect(x: min(a.x,b.x), y: min(a.y,b.y), width: abs(a.x-b.x), height: abs(a.y-b.y)).intersection(CGRect(origin: origin, size: CGSize(width: width, height: height)))
+                guard !box.isNull else { return }; drawn = box
+                selection = CGRect(x: (box.minX-origin.x)/width, y: (box.minY-origin.y)/height, width: box.width/width, height: box.height/height)
+            }.onEnded { _ in start = nil })
+            .accessibilityLabel("Draw a rectangular depth refinement region")
         }
     }
 }

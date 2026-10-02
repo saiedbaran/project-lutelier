@@ -46,6 +46,28 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(Recipe.self, from: saved), recipe)
     }
 
+    func testLegacyRecipeAndNewOpticalSettingsRoundTrip() throws {
+        let old = try JSONDecoder().decode(Recipe.self, from: Data("{\"farBlur\":0.8}".utf8))
+        XCTAssertEqual(old.farBlur, 0.8)
+        XCTAssertEqual(old.apertureBlades, 6)
+        XCTAssertEqual(old.highlightSensitivity, 0.7)
+        var recipe = old; recipe.bokeh = .anamorphic; recipe.anamorphicRatio = 2.4; recipe.bokehBloom = 0.5
+        XCTAssertEqual(try JSONDecoder().decode(Recipe.self, from: JSONEncoder().encode(recipe)), recipe)
+    }
+
+    func testDepthPatchAlignsScaleAndPreservesOutsideSelection() throws {
+        let w = 60, h = 60, box = CGRect(x: 15, y: 15, width: 30, height: 30)
+        let base = (0..<(w*h)).map { Float($0 % w) / Float(w) }
+        var local = base.map { ($0 - 0.1) / 2 }
+        local[30*w+30] += 0.08
+        let result = try DepthPatchFusion.merge(global: base, local: local, width: w, height: h, selection: box, support: CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
+        XCTAssertGreaterThan(result[30*w+30], base[30*w+30] + 0.1)
+        for y in 0..<h { for x in 0..<w where !box.contains(CGPoint(x: CGFloat(x), y: CGFloat(y))) {
+            XCTAssertEqual(result[y*w+x], base[y*w+x])
+        } }
+        XCTAssertThrowsError(try DepthPatchFusion.merge(global: base, local: Array(repeating: 0.5, count: w*h), width: w, height: h, selection: box, support: box))
+    }
+
     @MainActor
     func testStudioPromptHonorsIndependentKeepControls() {
         let prompt = StudioStore.generationPrompt(direction: "Soft key light, grey paper, seated three-quarter pose", changePose: false, changeLighting: true, changeBackground: true, changeFraming: false)
