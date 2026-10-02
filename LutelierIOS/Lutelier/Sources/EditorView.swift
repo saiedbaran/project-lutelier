@@ -217,13 +217,16 @@ struct EditorView: View {
                                         }
                                     }
                                 }.frame(height: 34)
-                                informationButton("Bokeh", detail: "Near and Far blur act on either side of the focus plane. White in the depth texture is near. Anamorphic changes oval ratio; Polygon changes aperture blades. Bloom strengthens background highlights, and sensitivity controls which luminosities contribute. Optical blur can leave edge halos; inspect hair and strong lights.")
+                                informationButton("Bokeh", detail: "Near and Far blur act on either side of the focus plane. White in the depth texture is near. Anamorphic changes oval ratio; Polygon changes aperture blades. Bokeh highlights extracts bright lights before shaped aperture integration. Cat-eye edges clips the pupil towards the frame edges; Rotation turns the oval or polygon. Bloom softens highlight spill; sensitivity sets its luminosity threshold. These are cinematic approximations, not a calibrated physical lens. Optical blur can leave edge halos; inspect hair and strong lights.")
                             }
                             control("Far blur", key: \.farBlur, range: 0...1).disabled(!store.hasSubject && !store.hasDepth)
                             control("Near blur", key: \.nearBlur, range: 0...1).disabled(!store.hasDepth)
                             control("Focus plane", key: \.focusDepth, range: 0...1).disabled(!store.hasDepth)
                             if store.recipe.bokeh == .anamorphic { control("Oval ratio", key: \.anamorphicRatio, range: 1...3) }
                             if store.recipe.bokeh == .polygon { control("Aperture blades", key: \.apertureBlades, range: 3...9) }
+                            control("Bokeh highlights", key: \.bokehHighlights, range: 0...1)
+                            control("Cat-eye edges", key: \.catEye, range: 0...1)
+                            control("Aperture rotation", key: \.apertureRotation, range: -90...90)
                             control("Background bloom", key: \.bokehBloom, range: 0...1)
                             control("Highlight sensitivity", key: \.highlightSensitivity, range: 0...1)
                             HStack {
@@ -265,12 +268,25 @@ struct EditorView: View {
         }.padding(14).lutelierGlass()
     }
     private var depthEngineControls: some View {
-        HStack {
-            Label("V2 Small", systemImage: "cpu").font(.caption.weight(.bold)).foregroundStyle(Palette.amber)
-            Spacer()
-            if store.hasDepth { Image(systemName: "checkmark.circle").accessibilityLabel("Depth ready") }
-            Button("Analyze") { Task { await store.analyze() } }.font(.caption.weight(.semibold)).disabled(store.busy)
-            informationButton("Depth models", detail: "Depth Anything V2 Small estimates relative depth through Core ML on the iPhone. Captured and saved depth take priority; Apple portrait/hair mattes protect coverage separately. No computer or inference server is used.\n\n\(store.depthStatus)\n\nDepth Pro: community Core ML conversions exist, but Apple's original weight license limits use to non-commercial scientific research and explicitly excludes product development. It is not installed or enabled in this app. Experimental status does not change those terms. An appropriately licensed model and physical-device validation are needed before adding it to Lutelier.", source: URL(string: "https://huggingface.co/apple/DepthPro/blob/main/LICENSE"))
+        VStack(spacing: 4) {
+            HStack {
+                Label("Depth Anything V2", systemImage: "cpu").font(.caption.weight(.bold)).foregroundStyle(Palette.amber)
+                Spacer()
+                if store.hasDepth { Image(systemName: "checkmark.circle").accessibilityLabel("Depth ready") }
+                Button("Analyze") { Task { await store.analyze() } }.font(.caption.weight(.semibold)).disabled(store.busy)
+                informationButton("Depth models", detail: "Depth Anything V2 Small estimates relative depth through Core ML on the iPhone. Captured and saved depth take priority; Apple portrait/hair mattes protect coverage separately. No computer or inference server is used.\n\n\(store.depthStatus)\n\nDepth Pro: community Core ML conversions exist, but Apple's original weight license limits use to non-commercial scientific research and explicitly excludes product development. It is not installed or enabled in this app. Experimental status does not change those terms. An appropriately licensed model and physical-device validation are needed before adding it to Lutelier.", source: URL(string: "https://huggingface.co/apple/DepthPro/blob/main/LICENSE"))
+            }
+            HStack {
+                Label("Apple Portrait / Hair", systemImage: "person.crop.rectangle").font(.caption)
+                Spacer()
+                informationButton("Apple mattes", detail: "\(store.matteStatus)\n\nApple capture mattes are used when available. Vision is the portrait fallback; a separate hair matte requires compatible captured photo data.")
+            }
+            HStack {
+                Text("Depth Pro").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Text("Unavailable").font(.caption2).foregroundStyle(.secondary)
+                informationButton("Depth Pro availability", detail: "Community Core ML conversions exist. The original weight license excludes product development. Depth Pro is not installed or enabled. Separate suitable rights and testing on a physical iPhone are required.", source: URL(string: "https://huggingface.co/apple/DepthPro/blob/main/LICENSE"))
+            }
         }
     }
     private func informationButton(_ title: String, detail: String, source: URL? = nil) -> some View {

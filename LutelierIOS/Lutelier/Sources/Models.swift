@@ -98,6 +98,9 @@ struct Recipe: Codable, Equatable {
     var farBlur = 0.0
     var focusDepth = 0.5
     var bokeh = Bokeh.soft
+    var bokehHighlights = 0.0
+    var catEye = 0.0
+    var apertureRotation = 0.0
     var bokehBloom = 0.0
     var highlightSensitivity = 0.7
     var anamorphicRatio = 2.0
@@ -126,6 +129,9 @@ struct Recipe: Codable, Equatable {
         nearBlur = try c.decodeIfPresent(Double.self, forKey: .nearBlur) ?? 0
         farBlur = try c.decodeIfPresent(Double.self, forKey: .farBlur) ?? 0
         focusDepth = try c.decodeIfPresent(Double.self, forKey: .focusDepth) ?? 0.5
+        bokehHighlights = try c.decodeIfPresent(Double.self, forKey: .bokehHighlights) ?? 0
+        catEye = try c.decodeIfPresent(Double.self, forKey: .catEye) ?? 0
+        apertureRotation = try c.decodeIfPresent(Double.self, forKey: .apertureRotation) ?? 0
         bokehBloom = try c.decodeIfPresent(Double.self, forKey: .bokehBloom) ?? 0
         highlightSensitivity = try c.decodeIfPresent(Double.self, forKey: .highlightSensitivity) ?? 0.7
         anamorphicRatio = try c.decodeIfPresent(Double.self, forKey: .anamorphicRatio) ?? 2

@@ -54,3 +54,14 @@ The earlier absence-of-conversion assessment was incomplete. A public community 
 - [Apple original model-weight license](https://huggingface.co/apple/DepthPro/blob/main/LICENSE)
 
 Editor model status, portrait texture explanations and refinement instructions are available through info buttons. They do not occupy permanent control rows.
+
+## Depth tab capability audit
+
+- Depth Anything V2 Small: bundled Core ML model; inference stays on the iPhone.
+- Apple Portrait/Hair: captured coverage when supplied, with Vision person fallback. Hair is not fabricated when missing.
+- Depth Pro: visible availability row and info link; unavailable pending suitable rights and physical-device validation. No weights or external inference service.
+- Context crop / Overlapping tiles: box-based re-estimation, scale alignment, consistency checks and feathered blending. Saved depth outside the box remains unchanged; the updated map drives the next blur render.
+- Inspection: Photo, Depth, and available Portrait/Hair textures. Zoom and box selection work in photo coordinates.
+- Optical controls: separate near/far blur and focus plane; Soft, Disc, Ring, Anamorphic and Polygon; oval ratio, blade count, aperture rotation, peripheral cat-eye clipping, shaped bokeh highlights, background bloom and luminosity sensitivity.
+
+Highlights are extracted from the original blur plane before aperture integration, rather than contrast-boosting an already blurred photograph. A normalized 96-sample idealized aperture supports rotated oval/polygon shapes and peripheral pupil clipping. The protected plane masks highlight input and final compositing; bounded screen addition avoids unbounded highlight gain. Bloom softens only the highlight contribution. This is an artistic camera simulation, not a measured lens point-spread function, occlusion-correct optical reconstruction or a guarantee of hair-level depth. Sampling artifacts and foreground colour bleed remain device-QA concerns. Zero highlight/bloom settings preserve the ordinary blur path. All depth/refinement/blur operations use Core ML, Vision and Core Image on the iPhone; the HTML illustrates controls only.

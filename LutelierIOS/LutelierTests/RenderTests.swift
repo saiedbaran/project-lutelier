@@ -52,8 +52,53 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(old.apertureBlades, 6)
         XCTAssertEqual(old.highlightSensitivity, 0.7)
         XCTAssertTrue(old.protectPortraitEdges)
-        var recipe = old; recipe.bokeh = .anamorphic; recipe.anamorphicRatio = 2.4; recipe.bokehBloom = 0.5
+        XCTAssertEqual(old.bokehHighlights, 0)
+        XCTAssertEqual(old.catEye, 0)
+        XCTAssertEqual(old.apertureRotation, 0)
+        var recipe = old; recipe.bokeh = .anamorphic; recipe.anamorphicRatio = 2.4; recipe.bokehBloom = 0.5; recipe.bokehHighlights = 0.8; recipe.catEye = 0.6; recipe.apertureRotation = 35
         XCTAssertEqual(try JSONDecoder().decode(Recipe.self, from: JSONEncoder().encode(recipe)), recipe)
+    }
+
+    private func opticalPixels(_ image: CIImage) -> [Float] {
+        let width = Int(image.extent.width), height = Int(image.extent.height)
+        var pixels = [Float](repeating: 0, count: width * height * 4)
+        pixels.withUnsafeMutableBytes {
+            CIContext().render(image, toBitmap: $0.baseAddress!, rowBytes: width * 16,
+                bounds: image.extent, format: .RGBAf, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+        }
+        return pixels
+    }
+
+    func testOpticalAperturesPreserveDimUniformBackgrounds() throws {
+        let extent = CGRect(x: 0, y: 0, width: 64, height: 64)
+        let image = CIImage(color: CIColor(red: 0.1, green: 0.1, blue: 0.1)).cropped(to: extent)
+        let mask = CIImage(color: .white).cropped(to: extent)
+        let baseline = opticalPixels(image), engine = RenderEngine()
+        for style in Bokeh.allCases {
+            var recipe = Recipe(); recipe.bokeh = style; recipe.catEye = 0.9
+            recipe.apertureRotation = 37; recipe.bokehHighlights = 1; recipe.bokehBloom = 0.6
+            let output = opticalPixels(try engine.blur(image, mask: mask, amount: 0.8, recipe: recipe))
+            XCTAssertTrue(output.allSatisfy { $0.isFinite })
+            for i in output.indices { XCTAssertEqual(output[i], baseline[i], accuracy: 0.002) }
+        }
+    }
+
+    func testHighlightEnhancementRespectsZeroBlurMask() throws {
+        let extent = CGRect(x: 0, y: 0, width: 64, height: 64)
+        let dark = CIImage(color: CIColor(red: 0.1, green: 0.1, blue: 0.1)).cropped(to: extent)
+        let point = CIImage(color: .white).cropped(to: CGRect(x: 29, y: 29, width: 6, height: 6))
+        let image = point.composited(over: dark)
+        var recipe = Recipe(); recipe.bokeh = .anamorphic; recipe.bokehHighlights = 1
+        recipe.bokehBloom = 0.7; recipe.catEye = 0.5
+        let engine = RenderEngine(), baseline = opticalPixels(image)
+        let output = opticalPixels(try engine.blur(image, mask: CIImage(color: .black).cropped(to: extent), amount: 1, recipe: recipe))
+        for i in output.indices { XCTAssertEqual(output[i], baseline[i], accuracy: 0.002) }
+        let white = CIImage(color: .white).cropped(to: extent)
+        var neutral = recipe; neutral.bokehHighlights = 0; neutral.bokehBloom = 0
+        let without = opticalPixels(try engine.blur(image, mask: white, amount: 1, recipe: neutral))
+        let enhanced = opticalPixels(try engine.blur(image, mask: white, amount: 1, recipe: recipe))
+        XCTAssertTrue(enhanced.allSatisfy { $0.isFinite })
+        XCTAssertTrue(zip(enhanced, without).contains { $0.0 > $0.1 + 0.001 })
     }
 
     private func matteValue(_ image: CIImage) -> Float {
