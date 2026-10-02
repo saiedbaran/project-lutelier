@@ -51,8 +51,53 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(old.farBlur, 0.8)
         XCTAssertEqual(old.apertureBlades, 6)
         XCTAssertEqual(old.highlightSensitivity, 0.7)
+        XCTAssertTrue(old.protectPortraitEdges)
         var recipe = old; recipe.bokeh = .anamorphic; recipe.anamorphicRatio = 2.4; recipe.bokehBloom = 0.5
         XCTAssertEqual(try JSONDecoder().decode(Recipe.self, from: JSONEncoder().encode(recipe)), recipe)
+    }
+
+    private func matteValue(_ image: CIImage) -> Float {
+        var value: Float = 0
+        withUnsafeMutableBytes(of: &value) { CIContext().render(image, toBitmap: $0.baseAddress!, rowBytes: 4, bounds: CGRect(x: floor(image.extent.midX), y: floor(image.extent.midY), width: 1, height: 1), format: .Rf, colorSpace: CGColorSpaceCreateDeviceGray()) }
+        return value
+    }
+
+    func testFineCaptureMatteTakesPriorityOverCoarseVisionMask() throws {
+        let extent = CGRect(x: 0, y: 0, width: 64, height: 32)
+        func mask(_ value: CGFloat) -> CIImage { CIImage(color: CIColor(red: value, green: value, blue: value)).cropped(to: extent) }
+        let subject = try XCTUnwrap(PortraitMatteService.subject(portrait: mask(0.25), hair: mask(0.6), fallback: mask(0.95), extent: extent))
+        XCTAssertEqual(matteValue(subject), 0.6, accuracy: 0.015)
+        XCTAssertEqual(matteValue(try XCTUnwrap(PortraitMatteService.subject(portrait: nil, hair: nil, fallback: mask(0.95), extent: extent))), 0.95, accuracy: 0.015)
+        XCTAssertNil(PortraitMatteService.subject(portrait: nil, hair: nil, fallback: nil, extent: extent))
+    }
+
+    func testFractionalHairCoverageReducesBlurWithoutChangingDepth() {
+        let extent = CGRect(x: 0, y: 0, width: 64, height: 64)
+        let blur = CIImage(color: CIColor(red: 0.8, green: 0.8, blue: 0.8)).cropped(to: extent)
+        let hair = CIImage(color: CIColor(red: 0.25, green: 0.25, blue: 0.25)).cropped(to: extent)
+        XCTAssertEqual(matteValue(PortraitMatteService.protect(blur, subject: hair)), 0.6, accuracy: 0.015)
+        XCTAssertEqual(matteValue(blur), 0.8, accuracy: 0.015)
+        XCTAssertEqual(matteValue(PortraitMatteService.protect(blur, subject: nil)), 0.8, accuracy: 0.015)
+    }
+
+    func testMatteFitsTranslatedExtentAndProtectedRecipePersists() throws {
+        let translated = CIImage(color: .white).cropped(to: CGRect(x: 12, y: 8, width: 10, height: 20))
+        let target = CGRect(x: 0, y: 0, width: 80, height: 40)
+        XCTAssertEqual(PortraitMatteService.fit(translated, to: target).extent, target)
+        var recipe = Recipe(); recipe.protectPortraitEdges = false
+        XCTAssertFalse(try JSONDecoder().decode(Recipe.self, from: JSONEncoder().encode(recipe)).protectPortraitEdges)
+    }
+
+    func testCenteredCaptureCropKeepsHairCoverageAligned() {
+        let full = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let black = CIImage(color: .black).cropped(to: full)
+        let stripe = CIImage(color: .white).cropped(to: CGRect(x: 30, y: 0, width: 10, height: 100)).composited(over: black)
+        let mattes = PortraitMatteService.crop(PortraitMattes(portrait: nil, hair: stripe), imageExtent: full, region: CGRect(x: 25, y: 0, width: 50, height: 100))
+        guard let hair = mattes.hair else { return XCTFail("Cropped hair should survive framing") }
+        XCTAssertEqual(hair.extent, CGRect(x: 0, y: 0, width: 50, height: 100))
+        XCTAssertEqual(matteValue(hair.cropped(to: CGRect(x: 7, y: 40, width: 1, height: 1))), 1, accuracy: 0.015)
+        XCTAssertEqual(matteValue(hair.cropped(to: CGRect(x: 20, y: 40, width: 1, height: 1))), 0, accuracy: 0.015)
+        XCTAssertNil(mattes.portrait)
     }
 
     func testDepthPatchAlignsScaleAndPreservesOutsideSelection() throws {

@@ -1,6 +1,6 @@
 {
   "status": "passed",
-  "checks": 826,
+  "checks": 831,
   "looks": 114,
   "categories": {
     "Movies": 26,
@@ -34,5 +34,6 @@
   "studio_native_generation": "Not tested: needs supported iOS 27 Apple Intelligence device",
   "depth_model": "DepthAnythingV2SmallF16",
   "depth_weights_sha256": "fa60d9b6a155734f59029ebb882fd54e549bfaee3539c1a9cbd2cbbab64a0fed",
-  "depth_inference": "Not run: needs Core ML on Apple hardware"
+  "depth_inference": "Not run: needs Core ML on Apple hardware",
+  "portrait_hair_capture": "Source wiring checked only; requires iPhone capture validation"
 }

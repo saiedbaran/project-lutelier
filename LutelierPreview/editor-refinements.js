@@ -45,23 +45,16 @@ setTimeout(finishLaunch,1600);launchBrand.addEventListener('click',finishLaunch)
 
 actions['look-category']=value=>{lookCategory=value;renderControls();};
 
-const depthMethods=[
- {id:'device',name:'On-device V2',detail:'Bundled Core ML depth in the iPhone app. This browser texture is illustrative.'},
- {id:'patchfusion',name:'PatchFusion',detail:'Implemented native companion workflow: official CUDA tile inference, raw depth import, crop alignment and feathering. Requires installed repository and cached weights on your local computer.'},
- {id:'depth-anything-3',name:'Depth Anything 3',detail:'2025 model. Native companion adapter implemented; use the Apache 2.0 Small/Base weights. Requires a separately installed model environment.'},
- {id:'depth-pro',name:'Depth Pro',detail:'Apple ICLR 2025 sharp metric depth model. Native companion adapter implemented; weights and device inference need setup and verification.'},
- {id:'patchrefiner-v2',name:'PatchRefiner V2',detail:'ICLR 2026 high-resolution refinement. Research candidate; adapter and phone conversion are not implemented.'},
- {id:'pro',name:'PRO',detail:'ICCV 2025 seamless patch refinement. Research only here: the authors require permission for commercial use.'},
- {id:'promptda',name:'PromptDA / ++',detail:'LiDAR-guided depth: requires calibrated sparse metric depth. PromptDA++ is announced; its official repository says code/models are forthcoming.'},
- {id:'marigold',name:'Marigold',detail:'Diffusion-based depth research candidate. No native or companion adapter is included yet.'}
-];
-let depthMethod='device';
+let inspectionTexture='Depth';
 const engineRenderControls=renderControls;
 renderControls=()=>{engineRenderControls();if(state.tab==='Depth'){
- const engine=depthMethods.find(m=>m.id===depthMethod),panel=document.createElement('div');panel.className='depth-engines';
- panel.innerHTML='<div class="caption">Depth engine</div><div class="pills">'+depthMethods.map(m=>pill(m.name,m.id===depthMethod,'depth-engine',m.id)).join('')+'</div><p class="caption depth-engine-detail">'+esc(engine.detail)+'</p>';
+ const panel=document.createElement('div');panel.className='depth-engines';
+ panel.innerHTML='<div class="caption">ON-DEVICE DEPTH</div><p class="depth-engine-detail">Depth Anything V2 Small + Apple portrait edges</p><p class="caption">Core ML scene depth, captured portrait/hair mattes and Vision fallback. All depth processing stays on the iPhone.</p><div class="pills">'+pill('Preserve portrait edges',state.protectPortraitEdges,'protect-portrait')+'</div><div class="pills">'+['Photo','Depth','Portrait','Hair'].map(t=>pill(t,t===(showDepthTexture?inspectionTexture:'Photo'),'matte-preview',t)).join('')+'</div><p class="caption">Browser textures are illustrations. Native Hair appears only when the photo contains an Apple hair matte.</p>';
  $('#controls').prepend(panel);
 }};
-actions['depth-engine']=value=>{depthMethod=value;renderControls();};
-actions.analyze=()=>{showDepthTexture=true;depthOverlay.hidden=false;renderControls();toast('Illustrative browser texture. '+depthMethods.find(m=>m.id===depthMethod).detail);};
-actions['depth-refine']=()=>toast(depthSelection?'Selection ready for '+depthMethods.find(m=>m.id===depthMethod).name+'. Depth inference runs only in the native app or configured local companion.':'Enable Box select and draw a region on the photo first.');
+function inspectMatte(value){inspectionTexture=value;showDepthTexture=value!=='Photo';depthOverlay.hidden=!showDepthTexture;depthOverlay.dataset.texture=value.toLowerCase();depthOverlay.querySelector('span').textContent='Illustrative '+value.toLowerCase()+' texture - native on-device analysis required';renderControls();}
+actions['matte-preview']=inspectMatte;
+actions['depth-texture']=()=>inspectMatte(showDepthTexture?'Photo':'Depth');
+actions['protect-portrait']=()=>{checkpoint();state.protectPortraitEdges=!state.protectPortraitEdges;renderControls();toast('Native blur '+(state.protectPortraitEdges?'preserves portrait/hair coverage.':'follows depth planes without portrait protection.'));};
+actions.analyze=()=>{inspectMatte('Depth');toast('On iPhone: Core ML depth + captured Apple mattes or Vision segmentation. This browser shows an illustrative texture.');};
+actions['depth-refine']=()=>toast(depthSelection?'Selection ready. Native Core ML refines this crop on iPhone; portrait/hair coverage remains separate.':'Enable Box select and draw a region on the photo first.');

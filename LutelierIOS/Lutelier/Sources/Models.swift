@@ -90,6 +90,7 @@ struct Recipe: Codable, Equatable {
     var highlightSensitivity = 0.7
     var anamorphicRatio = 2.0
     var apertureBlades = 6.0
+    var protectPortraitEdges = true
     var light = StudioLight.off
     var lightPower = 0.5
     var lightAngle = 0.3
@@ -117,6 +118,7 @@ struct Recipe: Codable, Equatable {
         highlightSensitivity = try c.decodeIfPresent(Double.self, forKey: .highlightSensitivity) ?? 0.7
         anamorphicRatio = try c.decodeIfPresent(Double.self, forKey: .anamorphicRatio) ?? 2
         apertureBlades = try c.decodeIfPresent(Double.self, forKey: .apertureBlades) ?? 6
+        protectPortraitEdges = try c.decodeIfPresent(Bool.self, forKey: .protectPortraitEdges) ?? true
         lightPower = try c.decodeIfPresent(Double.self, forKey: .lightPower) ?? 0.5
         lightAngle = try c.decodeIfPresent(Double.self, forKey: .lightAngle) ?? 0.3
     }

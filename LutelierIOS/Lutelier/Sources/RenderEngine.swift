@@ -72,10 +72,10 @@ final class RenderEngine {
         if let depth {
             if let map = depth.depth.map(fitted), let planeKernel {
                 if recipe.farBlur > 0, let mask = planeKernel.apply(extent: extent, arguments: [map, recipe.focusDepth, 0.0]) {
-                    image = try blur(image, mask: mask, amount: recipe.farBlur, recipe: recipe)
+                    image = try blur(image, mask: PortraitMatteService.protect(mask, subject: recipe.protectPortraitEdges ? depth.subject : nil), amount: recipe.farBlur, recipe: recipe)
                 }
                 if recipe.nearBlur > 0, let mask = planeKernel.apply(extent: extent, arguments: [map, recipe.focusDepth, 1.0]) {
-                    image = try blur(image, mask: mask, amount: recipe.nearBlur, recipe: recipe)
+                    image = try blur(image, mask: PortraitMatteService.protect(mask, subject: recipe.protectPortraitEdges ? depth.subject : nil), amount: recipe.nearBlur, recipe: recipe)
                 }
             } else if let subject = depth.subject.map(fitted), recipe.farBlur > 0 {
                 let background = subject.applyingFilter("CIColorInvert")

@@ -41,12 +41,12 @@ final class LocalDepthModel {
         return Self.image(values, width: w, height: h).transformed(by: CGAffineTransform(scaleX: image.extent.width / CGFloat(w), y: image.extent.height / CGFloat(h)))
             .transformed(by: CGAffineTransform(translationX: image.extent.minX, y: image.extent.minY)).cropped(to: image.extent)
     }
-    func refine(_ image: CIImage, region: CGRect, existing: CIImage, suppliedPatch: CIImage? = nil) throws -> CIImage {
+    func refine(_ image: CIImage, region: CGRect, existing: CIImage) throws -> CIImage {
         let selection = region.intersection(image.extent)
         guard selection.width >= 48, selection.height >= 48 else { throw LutelierError.message("Select a larger area for depth refinement.") }
         // Context around the box gives the model a stable reference for crop-scale alignment.
         let crop = selection.insetBy(dx: -selection.width * 0.2, dy: -selection.height * 0.2).intersection(image.extent)
-        let local = try suppliedPatch ?? estimate(image.cropped(to: crop))
+        let local = try estimate(image.cropped(to: crop))
         let maxSide: CGFloat = 2048, scale = min(1, maxSide / max(image.extent.width, image.extent.height))
         let w = Int(image.extent.width * scale), h = Int(image.extent.height * scale)
         let global = samples(existing, width: w, height: h)

@@ -48,6 +48,8 @@ body{font-family:var(--apple-font);-webkit-font-smoothing:antialiased}
 .phone{overflow:clip}.screen-backdrop-frame{position:absolute;inset:0;z-index:-1;overflow:hidden;pointer-events:none}.screen-backdrop{left:-70px;top:-70px;z-index:auto}
 .tabs{justify-content:space-between;gap:0}.tabs button{flex:1 0 0;min-width:0;padding-left:3px;padding-right:3px;font-weight:400}.tabs button.active{font-weight:750}.launch-brand{gap:10px}.launch-brand img{margin-bottom:18px}.launch-brand p{margin-top:-3px;font-size:12px;letter-spacing:1.2px}
 .look-categories{margin:8px 0 12px;touch-action:pan-x}.look-categories .pill{flex:none}.strength-control{margin-top:20px;padding-bottom:4px}.strength-control input[type=range]{appearance:none;-webkit-appearance:none;height:12px;border-radius:12px;background:linear-gradient(90deg,#ffffff42,#ffffff17);border:1px solid #ffffff30;box-shadow:inset 0 1px 2px #ffffff38,0 3px 8px #0002}.strength-control input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:30px;height:22px;border-radius:18px;border:1px solid #ffffffaa;background:linear-gradient(140deg,#ffffff90,#d9e5ff35);box-shadow:inset 0 1px 2px #fff,0 3px 10px #0005}.strength-control input[type=range]::-moz-range-thumb{width:30px;height:22px;border-radius:18px;border:1px solid #ffffffaa;background:#ffffff75;box-shadow:0 3px 10px #0005}.strength-control input[type=range]:active::-webkit-slider-thumb{box-shadow:inset 0 1px 3px #fff,0 0 14px #ffffff50}.controls:has(.strength-control){max-height:265px}.inspector:has(.strength-control){max-height:325px}
+
+.depth-demo[data-texture=portrait]{background:radial-gradient(ellipse at 50% 40%,#fff 12%,#f8f8f8 25%,#111 45%,#050505 70%)}.depth-demo[data-texture=hair]{background:radial-gradient(ellipse at 50% 25%,#fff 4%,#bbb 10%,#151515 16%,#050505 24%)}.depth-engine-detail{font-size:13px;font-weight:600;line-height:1.5;margin:8px 0}
 </style></head>
 <body>
 <svg class="defs" xmlns="http://www.w3.org/2000/svg"><defs><filter id="grain-noise"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter></defs></svg>
@@ -63,7 +65,7 @@ const paths={grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14"
 const icon=name=>`<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name]||paths.studio}</svg>`;
 const tabs=['Looks','Grain','Depth','Light','Studio','Adjust'];
 const copy={Looks:['Colour with character.','Explore film, cinema and camera inspired looks. Fine-tune the feeling, then compare with your original.'],Grain:['A texture you can feel.','From fine 35mm to pushed stock. Build grain, bloom, halation and vignette as independent layers.'],Depth:['Focus on what matters.','Explore separate near and far blur, focus planes and bokeh. Zoom into the photograph to refine an edge.'],Light:['Your pocket studio.','Explore softbox, Rembrandt, split, rim and stage lighting. Set the power and direction.'],Studio:['A whole new point of view.','Choose from 100 credited studio references or add your own. Direct the pose, lighting, background and framing.'],Adjust:['Find your balance.','Control exposure, colour temperature and saturation, or explore an assistant-guided edit.'],Camera:['Make the moment.','A separate pro camera workspace with manual exposure, focus, white balance, RAW and capture-depth controls.'],Library:['Your photographs.','Imported and captured photographs live here during this browser session. Keep the original and explore different treatments.']};
-let state={tab:'Looks',look:'original',strength:.7,grain:0,grainSize:1,grainColor:.2,texture:0,glow:0,halation:0,vignette:0,exposure:0,temperature:6500,saturation:1,nearBlur:0,farBlur:0,focusDepth:.5,bokeh:'Soft',bokehBloom:0,highlightSensitivity:.7,anamorphicRatio:2,apertureBlades:6,light:'Natural',lightPower:.5,lightAngle:.3};
+let state={tab:'Looks',look:'original',strength:.7,grain:0,grainSize:1,grainColor:.2,texture:0,glow:0,halation:0,vignette:0,exposure:0,temperature:6500,saturation:1,nearBlur:0,farBlur:0,focusDepth:.5,bokeh:'Soft',bokehBloom:0,highlightSensitivity:.7,anamorphicRatio:2,apertureBlades:6,protectPortraitEdges:true,light:'Natural',lightPower:.5,lightAngle:.3};
 let source=STUDIO.find(t=>t.file==='studio-087.jpg').embeddedSrc,zoom=1,panX=0,panY=0,compare=false,history=[],future=[],lookQuery='',lookCategory='All',studioCategory='All',studioQuery='',selected=STUDIO.find(t=>t.category==='Gel & colour')||STUDIO[0],custom=[],library=[{src:source,name:'First photograph'}],stream=null,activeScreen=null;
 let capture={pro:false,raw:false,depth:true,flash:false,grid:true,timer:0,ratio:'4:3',facing:'environment',iso:100,shutter:250,focus:.5,kelvin:5600,tint:0,zoom:1};
 const defaults={...state};
@@ -246,24 +248,17 @@ setTimeout(finishLaunch,1600);launchBrand.addEventListener('click',finishLaunch)
 
 actions['look-category']=value=>{lookCategory=value;renderControls();};
 
-const depthMethods=[
- {id:'device',name:'On-device V2',detail:'Bundled Core ML depth in the iPhone app. This browser texture is illustrative.'},
- {id:'patchfusion',name:'PatchFusion',detail:'Implemented native companion workflow: official CUDA tile inference, raw depth import, crop alignment and feathering. Requires installed repository and cached weights on your local computer.'},
- {id:'depth-anything-3',name:'Depth Anything 3',detail:'2025 model. Native companion adapter implemented; use the Apache 2.0 Small/Base weights. Requires a separately installed model environment.'},
- {id:'depth-pro',name:'Depth Pro',detail:'Apple ICLR 2025 sharp metric depth model. Native companion adapter implemented; weights and device inference need setup and verification.'},
- {id:'patchrefiner-v2',name:'PatchRefiner V2',detail:'ICLR 2026 high-resolution refinement. Research candidate; adapter and phone conversion are not implemented.'},
- {id:'pro',name:'PRO',detail:'ICCV 2025 seamless patch refinement. Research only here: the authors require permission for commercial use.'},
- {id:'promptda',name:'PromptDA / ++',detail:'LiDAR-guided depth: requires calibrated sparse metric depth. PromptDA++ is announced; its official repository says code/models are forthcoming.'},
- {id:'marigold',name:'Marigold',detail:'Diffusion-based depth research candidate. No native or companion adapter is included yet.'}
-];
-let depthMethod='device';
+let inspectionTexture='Depth';
 const engineRenderControls=renderControls;
 renderControls=()=>{engineRenderControls();if(state.tab==='Depth'){
- const engine=depthMethods.find(m=>m.id===depthMethod),panel=document.createElement('div');panel.className='depth-engines';
- panel.innerHTML='<div class="caption">Depth engine</div><div class="pills">'+depthMethods.map(m=>pill(m.name,m.id===depthMethod,'depth-engine',m.id)).join('')+'</div><p class="caption depth-engine-detail">'+esc(engine.detail)+'</p>';
+ const panel=document.createElement('div');panel.className='depth-engines';
+ panel.innerHTML='<div class="caption">ON-DEVICE DEPTH</div><p class="depth-engine-detail">Depth Anything V2 Small + Apple portrait edges</p><p class="caption">Core ML scene depth, captured portrait/hair mattes and Vision fallback. All depth processing stays on the iPhone.</p><div class="pills">'+pill('Preserve portrait edges',state.protectPortraitEdges,'protect-portrait')+'</div><div class="pills">'+['Photo','Depth','Portrait','Hair'].map(t=>pill(t,t===(showDepthTexture?inspectionTexture:'Photo'),'matte-preview',t)).join('')+'</div><p class="caption">Browser textures are illustrations. Native Hair appears only when the photo contains an Apple hair matte.</p>';
  $('#controls').prepend(panel);
 }};
-actions['depth-engine']=value=>{depthMethod=value;renderControls();};
-actions.analyze=()=>{showDepthTexture=true;depthOverlay.hidden=false;renderControls();toast('Illustrative browser texture. '+depthMethods.find(m=>m.id===depthMethod).detail);};
-actions['depth-refine']=()=>toast(depthSelection?'Selection ready for '+depthMethods.find(m=>m.id===depthMethod).name+'. Depth inference runs only in the native app or configured local companion.':'Enable Box select and draw a region on the photo first.');
+function inspectMatte(value){inspectionTexture=value;showDepthTexture=value!=='Photo';depthOverlay.hidden=!showDepthTexture;depthOverlay.dataset.texture=value.toLowerCase();depthOverlay.querySelector('span').textContent='Illustrative '+value.toLowerCase()+' texture - native on-device analysis required';renderControls();}
+actions['matte-preview']=inspectMatte;
+actions['depth-texture']=()=>inspectMatte(showDepthTexture?'Photo':'Depth');
+actions['protect-portrait']=()=>{checkpoint();state.protectPortraitEdges=!state.protectPortraitEdges;renderControls();toast('Native blur '+(state.protectPortraitEdges?'preserves portrait/hair coverage.':'follows depth planes without portrait protection.'));};
+actions.analyze=()=>{inspectMatte('Depth');toast('On iPhone: Core ML depth + captured Apple mattes or Vision segmentation. This browser shows an illustrative texture.');};
+actions['depth-refine']=()=>toast(depthSelection?'Selection ready. Native Core ML refines this crop on iPhone; portrait/hair coverage remains separate.':'Enable Box select and draw a region on the photo first.');
 </script></body></html>

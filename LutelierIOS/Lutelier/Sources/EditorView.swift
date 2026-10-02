@@ -17,7 +17,7 @@ struct EditorView: View {
     @StateObject private var lensMotion = LensMotion()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @State private var showDepthTexture = false
+    @State private var analysisTexture = AnalysisTexture.photo
     @State private var selectingDepth = false
     @State private var depthSelection: CGRect?
     @State private var pendingLookID: String?
@@ -49,9 +49,9 @@ struct EditorView: View {
                     if let image = store.preview {
                         ZStack(alignment: .bottom) {
                             if compare, let original = store.originalPreview { ComparisonPhoto(before: original, after: image) }
-                            else { ZoomPhoto(image: showDepthTexture ? (store.depthPreview ?? image) : image, visibleRegion: $visibleRegion).id(store.selectedPhotoID) }
+                            else { ZoomPhoto(image: analysisTexture == .depth ? (store.depthPreview ?? image) : analysisTexture == .portrait ? (store.portraitPreview ?? image) : analysisTexture == .hair ? (store.hairPreview ?? image) : image, visibleRegion: $visibleRegion).id(store.selectedPhotoID) }
                             if selectingDepth && tab == .depth && !compare { DepthSelectionOverlay(image: image, visibleRegion: visibleRegion, selection: $depthSelection) }
-                            if showDepthTexture { VStack { Text(store.depthPreview == nil ? "Estimate depth first" : "Relative depth • white is near").font(.caption2).padding(8).background(.black.opacity(0.65), in: Capsule()); Spacer() }.padding(12).allowsHitTesting(false) }
+                            if analysisTexture != .photo { VStack { Text(analysisTexture == .depth ? "Relative depth - white is near" : analysisTexture == .hair ? "Hair coverage - alpha matte" : "Portrait coverage - alpha matte").font(.caption2).padding(8).background(.black.opacity(0.65), in: Capsule()); Spacer() }.padding(12).allowsHitTesting(false) }
                             HStack(spacing: 8) {
                                 Text(compare ? "Slide to compare" : "Pinch to explore").font(.caption2).foregroundStyle(.secondary)
                                 Spacer()
@@ -74,8 +74,8 @@ struct EditorView: View {
         .onChange(of: scenePhase) { _, phase in if phase == .active && !reduceMotion { lensMotion.start() } else { lensMotion.stop() } }
         .onChange(of: reduceMotion) { _, reduced in if reduced { lensMotion.stop(); cancelLookTransition() } else if scenePhase == .active { lensMotion.start() } }
         .onChange(of: store.renderedLookID) { _, value in if value == pendingLookID { finishLookTransition() } }
-        .onChange(of: store.selectedPhotoID) { _, _ in cancelLookTransition(); depthSelection = nil; selectingDepth = false; showDepthTexture = false }
-        .onChange(of: tab) { _, value in if value != .depth { selectingDepth = false; showDepthTexture = false } }
+        .onChange(of: store.selectedPhotoID) { _, _ in cancelLookTransition(); depthSelection = nil; selectingDepth = false; analysisTexture = .photo }
+        .onChange(of: tab) { _, value in if value != .depth { selectingDepth = false; analysisTexture = .photo } }
         .onChange(of: store.error) { _, error in if error != nil { cancelLookTransition() } }
         .task(id: picker) { if let picker { await store.importPhoto(picker) } }
         .sheet(isPresented: $showCamera) { CaptureView { result in showCamera = false; Task { await store.receiveCapture(result) } } }
@@ -184,7 +184,7 @@ struct EditorView: View {
                         case .depth:
                             depthEngineControls
                             Text(store.depthStatus).font(.caption).foregroundStyle(.secondary)
-                            Button("Estimate scene depth") { Task { await store.analyze(useSelectedEngine: true) } }.disabled(store.busy)
+                            Button("Estimate scene depth") { Task { await store.analyze() } }.disabled(store.busy)
                             Picker("Bokeh", selection: Binding(get: { store.recipe.bokeh }, set: { value in store.edit { $0.bokeh = value } })) { ForEach(Bokeh.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
                             control("Far blur", key: \.farBlur, range: 0...1).disabled(!store.hasSubject && !store.hasDepth)
                             control("Near blur", key: \.nearBlur, range: 0...1).disabled(!store.hasDepth)
@@ -193,10 +193,17 @@ struct EditorView: View {
                             if store.recipe.bokeh == .polygon { control("Aperture blades", key: \.apertureBlades, range: 3...9) }
                             control("Background bloom", key: \.bokehBloom, range: 0...1)
                             control("Highlight sensitivity", key: \.highlightSensitivity, range: 0...1)
-                            Toggle("Show depth texture", isOn: $showDepthTexture).disabled(!store.hasDepth)
+                            Toggle("Preserve portrait edges", isOn: Binding(get: { store.recipe.protectPortraitEdges }, set: { value in store.edit { $0.protectPortraitEdges = value } })).disabled(!store.hasSubject)
+                            Text(store.matteStatus).font(.caption2).foregroundStyle(.secondary)
+                            Picker("Inspect texture", selection: $analysisTexture) {
+                                Text("Photo").tag(AnalysisTexture.photo)
+                                if store.hasDepth { Text("Depth").tag(AnalysisTexture.depth) }
+                                if store.portraitPreview != nil { Text("Portrait").tag(AnalysisTexture.portrait) }
+                                if store.hairPreview != nil { Text("Hair").tag(AnalysisTexture.hair) }
+                            }.pickerStyle(.segmented)
                             Toggle("Box select region", isOn: $selectingDepth)
                             Button { guard let region = depthSelection else { return }; Task { await store.refine(normalized: region) } } label: { Label("Refine selected depth", systemImage: "viewfinder") }.disabled(!store.hasDepth || store.busy || depthSelection == nil)
-                            Text("Draw a box over an edge. Local crop inference aligns with the global map and preserves depth outside the selection. Fine hair may still need a portrait matte.").font(.caption2).foregroundStyle(.secondary)
+                            Text("Draw a box over an edge. Local crop inference aligns with the global map and preserves depth outside the selection. Captured portrait/hair mattes remain separate and protect edges when enabled.").font(.caption2).foregroundStyle(.secondary)
                         case .light:
                             Text("Your pocket studio").font(.headline)
                             ScrollView(.horizontal, showsIndicators: false) { HStack { ForEach(StudioLight.allCases, id: \.self) { light in Button(light.rawValue) { store.edit { $0.light = light } }.buttonStyle(.bordered).tint(store.recipe.light == light ? Palette.amber : .gray) } } }
@@ -227,32 +234,12 @@ struct EditorView: View {
         }.padding(14).lutelierGlass()
     }
     private var depthEngineControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Depth engine").font(.caption.weight(.bold))
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(DepthEngine.allCases) { method in
-                        Button(method.name) { store.selectedDepthEngine = method }
-                            .buttonStyle(.bordered).tint(store.selectedDepthEngine == method ? Palette.amber : .gray)
-                            .disabled(store.busy || (method != .device && !store.companionEngines.contains(method.rawValue)))
-                    }
-                }
-            }
-            DisclosureGroup("Advanced models · local computer") {
-                VStack(alignment: .leading, spacing: 10) {
-                    TextField("http://192.168.1.20:8770", text: $store.companionAddress).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                        .onChange(of: store.companionAddress) { _, _ in store.companionEngines = []; store.selectedDepthEngine = .device }
-                    SecureField("Companion token", text: $store.companionToken).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .onChange(of: store.companionToken) { _, _ in store.companionEngines = []; store.selectedDepthEngine = .device }
-                    Button("Connect to companion") { Task { await store.connectDepthCompanion() } }.disabled(store.busy)
-                    Text(store.companionStatus).font(.caption2).foregroundStyle(.secondary)
-                    Text("Estimate sends this photo; Refine sends the selected crop with context. Models run on your computer. HTTP uses your trusted local network. Credentials are kept only for this session.").font(.caption2).foregroundStyle(.secondary)
-                    Text("Research watchlist: PatchRefiner V2 (ICLR 2026) · PRO (ICCV 2025) · PromptDA (CVPR 2025) · Marigold. These need separate adapters or calibrated LiDAR; PRO requires commercial permission. See DEPTH-REFINEMENT.md.").font(.caption2).foregroundStyle(.secondary)
-                }.padding(.top, 8)
-            }.font(.caption)
+        VStack(alignment: .leading, spacing: 8) {
+            Label("ON-DEVICE DEPTH", systemImage: "cpu").font(.caption.weight(.bold)).foregroundStyle(Palette.amber)
+            Text("Depth Anything V2 Small + Apple portrait edges").font(.caption)
+            Text("Captured depth and fine mattes take priority. Other photos use Core ML scene depth and Vision person segmentation. No computer or network connection required.").font(.caption2).foregroundStyle(.secondary)
         }
     }
-
     private var lookControls: some View {
         VStack(spacing: 6) {
             HStack {

@@ -13,8 +13,6 @@
 <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/><key>UISceneConfigurations</key><dict/></dict>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
 <key>NSCameraUsageDescription</key><string>Capture photographs with manual controls and optional RAW and depth data.</string>
-<key>NSLocalNetworkUsageDescription</key><string>Send a photograph or selected crop to your configured local computer for advanced depth inference when you choose Estimate or Refine.</string>
-<key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 <key>NSPhotoLibraryAddUsageDescription</key><string>Save your finished photographs and RAW originals to your Photos library.</string>
 <key>UIApplicationSupportsIndirectInputEvents</key><true/>
 <key>NSMotionUsageDescription</key><string>Lutelier uses device tilt to move the lens logo shadow.</string></dict></plist>

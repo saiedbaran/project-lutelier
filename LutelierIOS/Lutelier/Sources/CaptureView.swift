@@ -104,8 +104,14 @@ struct CaptureView: View {
         let cropped = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { _ in
             image.draw(at: CGPoint(x: -(image.size.width - width) / 2, y: -(image.size.height - height) / 2))
         }
-        // Depth coordinates describe the full sensor frame; Vision rebuilds the mask for a cropped image.
-        return CaptureResult(processed: cropped.jpegData(compressionQuality: 0.96) ?? result.processed, raw: result.raw, depth: nil)
+        guard let processed = cropped.jpegData(compressionQuality: 0.96) else { return result }
+        // Crop already-oriented coverage with the same centered framing as the photograph.
+        let mattes = PortraitMatteService.read(result.processed, portrait: result.portrait, hair: result.hair)
+        let full = CGRect(origin: .zero, size: image.size)
+        let region = CGRect(x: (image.size.width - width) / 2, y: (image.size.height - height) / 2, width: width, height: height)
+        let croppedMattes = PortraitMatteService.crop(mattes, imageExtent: full, region: region)
+        // Sensor disparity is re-estimated by Core ML for the cropped frame.
+        return CaptureResult(processed: processed, raw: result.raw, depth: nil, orientedMattes: croppedMattes)
     }
     @MainActor private func timedCapture() async {
         if timer > 0 {

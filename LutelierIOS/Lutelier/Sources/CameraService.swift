@@ -1,7 +1,7 @@
 import AVFoundation
 import SwiftUI
 
-struct CaptureResult { var processed: Data; var raw: Data?; var depth: AVDepthData? }
+struct CaptureResult { var processed: Data; var raw: Data?; var depth: AVDepthData?; var portrait: AVPortraitEffectsMatte? = nil; var hair: AVSemanticSegmentationMatte? = nil; var orientedMattes: PortraitMattes? = nil }
 
 final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate, AVCaptureVideoDataOutputSampleBufferDelegate {
     let session = AVCaptureSession()
@@ -15,6 +15,8 @@ final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDele
     private var pendingProcessed: Data?
     private var pendingRaw: Data?
     private var pendingDepth: AVDepthData?
+    private var pendingPortrait: AVPortraitEffectsMatte?
+    private var pendingHair: AVSemanticSegmentationMatte?
     @Published var ready = false
     @Published var error: String?
     @Published var rawAvailable = false
@@ -75,6 +77,8 @@ final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDele
     private func configureOutput(_ camera: AVCaptureDevice) {
         output.isAppleProRAWEnabled = output.isAppleProRAWSupported
         output.isDepthDataDeliveryEnabled = output.isDepthDataDeliverySupported
+        output.isPortraitEffectsMatteDeliveryEnabled = output.isDepthDataDeliveryEnabled && output.isPortraitEffectsMatteDeliverySupported
+        output.enabledSemanticSegmentationMatteTypes = output.isDepthDataDeliveryEnabled ? output.availableSemanticSegmentationMatteTypes.filter { $0 == .hair } : []
         let raw = !output.availableRawPhotoPixelFormatTypes.isEmpty
         DispatchQueue.main.async {
             self.rawAvailable = raw
@@ -173,6 +177,7 @@ final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDele
         let options = (useRAW, useDepth, flash)
         queue.async {
             self.pendingRaw = nil; self.pendingProcessed = nil; self.pendingDepth = nil
+            self.pendingPortrait = nil; self.pendingHair = nil
             let settings: AVCapturePhotoSettings
             if options.0, let format = self.output.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }) ?? self.output.availableRawPhotoPixelFormatTypes.first {
                 settings = AVCapturePhotoSettings(rawPixelFormatType: format, processedFormat: [AVVideoCodecKey: AVVideoCodecType.jpeg])
@@ -180,6 +185,11 @@ final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDele
             // RAW/depth simultaneous delivery varies by device; request depth for processed mode.
             settings.isDepthDataDeliveryEnabled = !options.0 && options.1 && self.output.isDepthDataDeliveryEnabled
             settings.embedsDepthDataInPhoto = settings.isDepthDataDeliveryEnabled
+            settings.isPortraitEffectsMatteDeliveryEnabled = settings.isDepthDataDeliveryEnabled && self.output.isPortraitEffectsMatteDeliveryEnabled
+            settings.embedsPortraitEffectsMatteInPhoto = settings.isPortraitEffectsMatteDeliveryEnabled
+            // RAW combinations vary by camera; request semantic mattes only for processed depth capture.
+            settings.enabledSemanticSegmentationMatteTypes = settings.isDepthDataDeliveryEnabled ? self.output.enabledSemanticSegmentationMatteTypes : []
+            settings.embedsSemanticSegmentationMattesInPhoto = !settings.enabledSemanticSegmentationMatteTypes.isEmpty
             if self.output.supportedFlashModes.contains(.on) { settings.flashMode = options.2 ? .on : .off }
             if let connection = self.output.connection(with: .video), connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
             self.output.capturePhoto(with: settings, delegate: self)
@@ -189,10 +199,14 @@ final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDele
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error { publishError(error.localizedDescription); return }
         if photo.isRawPhoto { pendingRaw = photo.fileDataRepresentation() }
-        else { pendingProcessed = photo.fileDataRepresentation(); pendingDepth = photo.depthData }
+        else {
+            pendingProcessed = photo.fileDataRepresentation(); pendingDepth = photo.depthData
+            pendingPortrait = photo.portraitEffectsMatte
+            pendingHair = photo.semanticSegmentationMatte(for: .hair)
+        }
     }
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
-        let result = pendingProcessed.map { CaptureResult(processed: $0, raw: pendingRaw, depth: pendingDepth) }
+        let result = pendingProcessed.map { CaptureResult(processed: $0, raw: pendingRaw, depth: pendingDepth, portrait: pendingPortrait, hair: pendingHair) }
         DispatchQueue.main.async {
             self.capturing = false
             if let error { self.error = error.localizedDescription }
