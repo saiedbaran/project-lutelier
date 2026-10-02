@@ -8,6 +8,13 @@ private struct ToolTabFrames: PreferenceKey {
     static func reduce(value: inout [ToolTab: CGRect], nextValue: () -> [ToolTab: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, new in new }) }
 }
 
+private struct EditorInformation: Identifiable {
+    let id = UUID()
+    var title: String
+    var detail: String
+    var source: URL? = nil
+}
+
 struct EditorView: View {
     @Namespace private var toolSelection
     @State private var tabFrames: [ToolTab: CGRect] = [:]
@@ -31,6 +38,7 @@ struct EditorView: View {
     @State private var showAssistant = false
     @State private var showStudio = false
     @State private var importLUT = false
+    @State private var information: EditorInformation?
     @State private var visibleRegion = CGRect(x: 0, y: 0, width: 1, height: 1)
     var filteredLooks: [Look] { store.looks.filter { category == "All" || $0.category == category } }
 
@@ -60,7 +68,7 @@ struct EditorView: View {
                         .clipShape(.rect(cornerRadius: (geometry.size.width - 32) * 0.09, style: .continuous))
                         .background { Image(uiImage: image).resizable().scaledToFill().blur(radius: 35).opacity(0.45).scaleEffect(1.08).allowsHitTesting(false) }
                     } else { welcome }
-                    if store.hasPhoto { inspector.frame(height: tab == .studio ? 185 : tab == .adjust ? 240 : min(geometry.size.height * (tab == .looks ? 0.43 : 0.34), tab == .looks ? 340 : 290)) }
+                    if store.hasPhoto { inspector.frame(height: tab == .studio ? 195 : tab == .adjust ? 240 : min(geometry.size.height * (tab == .looks || tab == .depth ? 0.43 : 0.34), tab == .looks || tab == .depth ? 340 : 290)) }
                     bottomBar
                 }.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
                 if store.busy { ProgressView().padding(22).lutelierGlass().accessibilityLabel("Processing photograph") }
@@ -81,6 +89,18 @@ struct EditorView: View {
         .sheet(isPresented: $showLibrary) { library }
         .sheet(isPresented: $showAssistant) { assistant }
         .sheet(isPresented: $showStudio) { StudioView(editor: store, studio: studio) }
+        .sheet(item: $information) { info in
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text(info.detail).font(.body)
+                        if let source = info.source { Link("Model license", destination: source) }
+                    }.padding(24)
+                }.navigationTitle(info.title).navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { information = nil } } }
+                    .background(Palette.ink)
+            }.preferredColorScheme(.dark).tint(Palette.amber).presentationDetents([.medium, .large])
+        }
         .fileImporter(isPresented: $importLUT, allowedContentTypes: [UTType(filenameExtension: "cube") ?? .plainText]) { result in
             switch result { case .success(let url): store.importCube(url); case .failure(let error): store.error = error.localizedDescription }
         }
@@ -171,10 +191,10 @@ struct EditorView: View {
             if tab == .looks { lookControls }
             else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 10) {
                         switch tab {
                         case .grain:
-                            Text("A texture you can feel").font(.headline)
+                            informationRow("Grain", detail: "Grain changes amount, size and colour of a repeatable film texture. Texture adds local contrast; Glow softens highlights; Halation adds warm highlight spill; Vignette darkens the frame edges.")
                             HStack { grainPreset("Clean", amount: 0, size: 1); grainPreset("35mm", amount: 0.3, size: 1); grainPreset("Pushed", amount: 0.65, size: 1.5) }
                             control("Grain", key: \.grain, range: 0...1)
                             control("Size", key: \.grainSize, range: 0.5...3)
@@ -185,9 +205,20 @@ struct EditorView: View {
                             control("Vignette", key: \.vignette, range: 0...1)
                         case .depth:
                             depthEngineControls
-                            Text(store.depthStatus).font(.caption).foregroundStyle(.secondary)
-                            Button("Estimate scene depth") { Task { await store.analyze() } }.disabled(store.busy)
-                            Picker("Bokeh", selection: Binding(get: { store.recipe.bokeh }, set: { value in store.edit { $0.bokeh = value } })) { ForEach(Bokeh.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+                            HStack {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(Bokeh.allCases, id: \.self) { item in
+                                            Button(item.rawValue) { store.edit { $0.bokeh = item } }
+                                                .font(.caption.weight(store.recipe.bokeh == item ? .bold : .regular))
+                                                .padding(.horizontal, 12).padding(.vertical, 8)
+                                                .background(store.recipe.bokeh == item ? Palette.amber.opacity(0.18) : .white.opacity(0.06), in: Capsule())
+                                                .foregroundStyle(store.recipe.bokeh == item ? Palette.amber : .secondary)
+                                        }
+                                    }
+                                }.frame(height: 34)
+                                informationButton("Bokeh", detail: "Near and Far blur act on either side of the focus plane. White in the depth texture is near. Anamorphic changes oval ratio; Polygon changes aperture blades. Bloom strengthens background highlights, and sensitivity controls which luminosities contribute. Optical blur can leave edge halos; inspect hair and strong lights.")
+                            }
                             control("Far blur", key: \.farBlur, range: 0...1).disabled(!store.hasSubject && !store.hasDepth)
                             control("Near blur", key: \.nearBlur, range: 0...1).disabled(!store.hasDepth)
                             control("Focus plane", key: \.focusDepth, range: 0...1).disabled(!store.hasDepth)
@@ -195,8 +226,10 @@ struct EditorView: View {
                             if store.recipe.bokeh == .polygon { control("Aperture blades", key: \.apertureBlades, range: 3...9) }
                             control("Background bloom", key: \.bokehBloom, range: 0...1)
                             control("Highlight sensitivity", key: \.highlightSensitivity, range: 0...1)
-                            Toggle("Preserve portrait edges", isOn: Binding(get: { store.recipe.protectPortraitEdges }, set: { value in store.edit { $0.protectPortraitEdges = value } })).disabled(!store.hasSubject)
-                            Text(store.matteStatus).font(.caption2).foregroundStyle(.secondary)
+                            HStack {
+                                Toggle("Preserve portrait edges", isOn: Binding(get: { store.recipe.protectPortraitEdges }, set: { value in store.edit { $0.protectPortraitEdges = value } })).disabled(!store.hasSubject)
+                                informationButton("Portrait edges", detail: "\(store.matteStatus)\n\nCaptured Apple portrait/hair mattes are coverage images, not depth. Vision accurate person segmentation is the fallback. Protection reduces blur on subject edges. Hair inspection is available only when Apple supplied a hair matte.")
+                            }
                             Picker("Inspect texture", selection: $analysisTexture) {
                                 Text("Photo").tag(AnalysisTexture.photo)
                                 if store.hasDepth { Text("Depth").tag(AnalysisTexture.depth) }
@@ -204,33 +237,26 @@ struct EditorView: View {
                                 if store.hairPreview != nil { Text("Hair").tag(AnalysisTexture.hair) }
                             }.pickerStyle(.segmented)
                             Toggle("Box select region", isOn: $selectingDepth)
+                            informationRow("Refinement", detail: "Draw a box, choose a method, then Refine selected depth. Context crop runs one contextual inference. Overlapping tiles is experimental: one context + four detail crops, with robust scale alignment, consistency checks and feathered blending. It is not the learned PatchFusion network. Depth outside the box and portrait/hair coverage are preserved. More passes take more time and memory; finer geometry is not guaranteed.\n\nCurrent state: \(store.depthStatus)")
                             Picker("Depth refinement", selection: $store.depthRefinementMethod) {
                                 ForEach(DepthRefinementMethod.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                             }.pickerStyle(.segmented).disabled(store.busy)
                             Button { guard let region = depthSelection else { return }; Task { await store.refine(normalized: region) } } label: { Label("Refine selected depth", systemImage: "viewfinder") }.disabled(!store.hasDepth || store.busy || depthSelection == nil)
-                            Text(store.depthRefinementMethod == .overlapping ? "Experimental: one context crop + four overlapping detail crops, aligned and blended on iPhone. Inspect the result; finer detail is not guaranteed. Depth outside the box and portrait/hair mattes are preserved." : "One contextual crop on iPhone. Select Overlapping tiles for more detail passes. Depth outside the box and portrait/hair mattes are preserved.").font(.caption2).foregroundStyle(.secondary)
                         case .light:
-                            Text("Your pocket studio").font(.headline)
+                            informationRow("Studio lighting", detail: "These controls approximate studio lights on the captured photograph using portrait coverage. Power sets the intensity and Direction moves the light. Existing shadows and reflections may remain; this is not physical lighting reconstruction or live relighting.")
                             ScrollView(.horizontal, showsIndicators: false) { HStack { ForEach(StudioLight.allCases, id: \.self) { light in Button(light.rawValue) { store.edit { $0.light = light } }.buttonStyle(.bordered).tint(store.recipe.light == light ? Palette.amber : .gray) } } }
                             if !store.hasSubject { Button("Find portrait subject") { Task { await store.analyze() } } }
                             control("Power", key: \.lightPower, range: 0...1).disabled(!store.hasSubject)
                             control("Direction", key: \.lightAngle, range: 0...1).disabled(!store.hasSubject)
-                            Text("Studio-light approximation on the captured photo. Existing shadows and reflections may remain.").font(.caption2).foregroundStyle(.secondary)
                         case .adjust:
+                            informationRow("Adjust", detail: "Exposure changes brightness in stops. White balance adjusts warmth, and Saturation changes colour intensity. The editing assistant uses Apple's on-device Foundation Models to suggest bounded adjustments; it does not estimate per-pixel depth.")
                             control("Exposure", key: \.exposure, range: -3...3)
                             control("White balance", key: \.temperature, range: 2500...10000)
                             control("Saturation", key: \.saturation, range: 0...2)
                             Button { showAssistant = true } label: { Label("Ask Apple Intelligence", systemImage: "sparkles") }
                         case .studio:
-                            HStack {
-                                Image(systemName: "camera.aperture").font(.title).foregroundStyle(Palette.amber)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Your next studio session").font(.headline)
-                                    Text("100 references. A new pose, light and backdrop.").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
+                            informationRow("Studio · 100 references", detail: "Choose a predefined reference or add your own. Apple Intelligence describes the setup; Image Playground creates a portrait inside Lutelier. Exact pose, lighting and identity transfer are not guaranteed. Generation may use Apple-managed Private Cloud Compute. Originals are preserved.")
                             Button { showStudio = true } label: { Label("Explore Studio", systemImage: "sparkles").font(.headline).frame(maxWidth: .infinity).padding(14).background(Palette.amber, in: Capsule()).foregroundStyle(Palette.ink) }
-                            Text("Use a predefined reference or add your own. Apple Intelligence reads the setup; Image Playground creates your portrait inside Lutelier.").font(.caption2).foregroundStyle(.secondary)
                         case .looks: EmptyView()
                         }
                     }.padding(.horizontal, 4)
@@ -239,11 +265,21 @@ struct EditorView: View {
         }.padding(14).lutelierGlass()
     }
     private var depthEngineControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("ON-DEVICE DEPTH", systemImage: "cpu").font(.caption.weight(.bold)).foregroundStyle(Palette.amber)
-            Text("Depth Anything V2 Small + Apple portrait edges").font(.caption)
-            Text("Captured depth and fine mattes take priority. Other photos use Core ML scene depth and Vision person segmentation. No computer or network connection required.").font(.caption2).foregroundStyle(.secondary)
+        HStack {
+            Label("V2 Small", systemImage: "cpu").font(.caption.weight(.bold)).foregroundStyle(Palette.amber)
+            Spacer()
+            if store.hasDepth { Image(systemName: "checkmark.circle").accessibilityLabel("Depth ready") }
+            Button("Analyze") { Task { await store.analyze() } }.font(.caption.weight(.semibold)).disabled(store.busy)
+            informationButton("Depth models", detail: "Depth Anything V2 Small estimates relative depth through Core ML on the iPhone. Captured and saved depth take priority; Apple portrait/hair mattes protect coverage separately. No computer or inference server is used.\n\n\(store.depthStatus)\n\nDepth Pro: community Core ML conversions exist, but Apple's original weight license limits use to non-commercial scientific research and explicitly excludes product development. It is not installed or enabled in this app. Experimental status does not change those terms. An appropriately licensed model and physical-device validation are needed before adding it to Lutelier.", source: URL(string: "https://huggingface.co/apple/DepthPro/blob/main/LICENSE"))
         }
+    }
+    private func informationButton(_ title: String, detail: String, source: URL? = nil) -> some View {
+        Button { information = EditorInformation(title: title, detail: detail, source: source) } label: {
+            Image(systemName: "info.circle").font(.system(size: 17)).frame(width: 32, height: 32)
+        }.buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Information about \(title)")
+    }
+    private func informationRow(_ title: String, detail: String) -> some View {
+        HStack { Text(title).font(.caption.weight(.semibold)); Spacer(); informationButton(title, detail: detail) }
     }
     private var lookControls: some View {
         VStack(spacing: 6) {

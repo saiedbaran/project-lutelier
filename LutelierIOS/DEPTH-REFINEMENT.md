@@ -29,7 +29,7 @@ This original coarse/fine fusion borrows the multi-scale/overlap idea from the l
 
 ## Other models
 
-**PatchRefiner V2 (ICLR 2026)** is a newer lightweight refinement candidate; its official inference uses a Python/distributed GPU launcher, and no verified Core ML/iPhone integration is included here. **Prompt Depth Anything** is a promising LiDAR-guided candidate, but no verified Core ML conversion or iPhone benchmark is bundled. It requires calibrated metric LiDAR, which normalized disparity cannot replace. Depth Pro has no verified runtime in this app. MODNet and Robust Video Matting are not bundled; conversions, licensing and device evaluation remain separate work. These methods are not presented as working options.
+**PatchRefiner V2 (ICLR 2026)** is a newer lightweight refinement candidate; its official inference uses a Python/distributed GPU launcher, and no verified Core ML/iPhone integration is included here. **Prompt Depth Anything** is a promising LiDAR-guided candidate, but no verified Core ML conversion or iPhone benchmark is bundled. It requires calibrated metric LiDAR, which normalized disparity cannot replace. Community Core ML Depth Pro conversions exist, including a pruned/quantized normalized-disparity variant (~745 MB), but no runtime is enabled in this product. The original Apple weight license (AMLR) explicitly excludes product development and commercial products; conversion repository ASCL labels do not override it. Experimental status is not a license exception. MODNet and Robust Video Matting are not bundled; conversions, licensing and device evaluation remain separate work. These methods are not presented as working options.
 
 ## Verification and provenance
 
@@ -45,3 +45,12 @@ Apple's unmodified model package and the Small model's Apache 2.0 license are bu
 
 - [PatchFusion coarse/fine learned fusion](https://arxiv.org/abs/2312.02284)
 - [PatchRefiner V2 official release and inference](https://github.com/zhyever/PatchRefinerV2)
+
+## Depth Pro assessment (2 October 2026)
+
+The earlier absence-of-conversion assessment was incomplete. A public community conversion exists, but its normalized output is relative inverse depth, not metric metres, and physical-device latency/memory/quality remain unverified here. Apple's code license and model-weight license are distinct. The latter permits only non-commercial scientific research and excludes product development. No Depth Pro weights were downloaded, bundled, installed or enabled. A separate qualifying research project or separately granted model rights would be needed before proceeding. The depth information sheet explains this; a nonworking selectable engine is not added.
+
+- [Community conversion author/model card](https://huggingface.co/KeighBee/coreml-DepthPro)
+- [Apple original model-weight license](https://huggingface.co/apple/DepthPro/blob/main/LICENSE)
+
+Editor model status, portrait texture explanations and refinement instructions are available through info buttons. They do not occupy permanent control rows.
