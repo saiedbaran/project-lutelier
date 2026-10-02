@@ -25,7 +25,6 @@ struct EditorView: View {
     @State private var picker: PhotosPickerItem?
     @State private var tab = ToolTab.looks
     @State private var category = "All"
-    @State private var query = ""
     @State private var compare = false
     @State private var showCamera = false
     @State private var showLibrary = false
@@ -33,7 +32,7 @@ struct EditorView: View {
     @State private var showStudio = false
     @State private var importLUT = false
     @State private var visibleRegion = CGRect(x: 0, y: 0, width: 1, height: 1)
-    var filteredLooks: [Look] { store.looks.filter { (category == "All" || $0.category == category) && (query.isEmpty || ($0.name + " " + $0.description).localizedCaseInsensitiveContains(query)) } }
+    var filteredLooks: [Look] { store.looks.filter { category == "All" || $0.category == category } }
 
     var body: some View {
         GeometryReader { geometry in
@@ -147,12 +146,15 @@ struct EditorView: View {
             GeometryReader { tabsGeometry in HStack(spacing: 0) {
                 ForEach(ToolTab.allCases, id: \.self) { item in
                     Button { withAnimation(.snappy(duration: 0.22)) { tab = item } } label: {
-                        Text(item.rawValue).font(.caption.weight((hoveredTab ?? tab) == item ? .bold : .regular)).frame(width: tabsGeometry.size.width / CGFloat(ToolTab.allCases.count)).padding(.vertical, 11)
+                        VStack(spacing: 4) {
+                            Image(systemName: item.symbol).font(.system(size: 18, weight: .regular)).frame(height: 20).accessibilityHidden(true)
+                            Text(item.rawValue).font(.caption2.weight((hoveredTab ?? tab) == item ? .bold : .regular)).lineLimit(1).minimumScaleFactor(0.8)
+                        }.frame(width: tabsGeometry.size.width / CGFloat(ToolTab.allCases.count), height: 54)
                             .background {
                                 if (hoveredTab ?? tab) == item { Capsule().fill(.clear).glassEffect(.regular, in: Capsule()).matchedGeometryEffect(id: "tool-selection", in: toolSelection) }
                             }
                             .foregroundStyle((hoveredTab ?? tab) == item ? Palette.amber : .secondary)
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(.plain).accessibilityLabel(item.rawValue)
                     .background(GeometryReader { cell in Color.clear.preference(key: ToolTabFrames.self, value: [item: cell.frame(in: .named("tool-tabs"))]) })
                 }
             }.coordinateSpace(name: "tool-tabs")
@@ -165,7 +167,7 @@ struct EditorView: View {
                         withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) { tab = item }
                     }
                 })
-            }.frame(height: 38)
+            }.frame(height: 54)
             if tab == .looks { lookControls }
             else {
                 ScrollView {
@@ -245,10 +247,6 @@ struct EditorView: View {
     }
     private var lookControls: some View {
         VStack(spacing: 6) {
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search film, camera, or mood", text: $query).font(.caption)
-            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(["All"] + Array(Set(store.looks.map(\.category))).filter { $0 != "All" }.sorted(), id: \.self) { item in

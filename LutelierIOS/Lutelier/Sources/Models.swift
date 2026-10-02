@@ -65,7 +65,19 @@ struct Look: Codable, Identifiable, Hashable {
     static let original = Look(id: "original", name: "Original", category: "All", description: "Your unedited photograph", file: "", dimension: 0, fx: [:])
 }
 
-enum ToolTab: String, CaseIterable { case looks = "Looks", grain = "Grain", depth = "Depth", light = "Light", studio = "Studio", adjust = "Adjust" }
+enum ToolTab: String, CaseIterable {
+    case looks = "Looks", grain = "Grain", depth = "Depth", light = "Light", studio = "Studio", adjust = "Adjust"
+    var symbol: String {
+        switch self {
+        case .looks: "camera.filters"
+        case .grain: "aqi.medium"
+        case .depth: "viewfinder"
+        case .light: "sun.max"
+        case .studio: "sparkle"
+        case .adjust: "slider.horizontal.3"
+        }
+    }
+}
 enum Bokeh: String, Codable, CaseIterable { case soft = "Soft", disc = "Disc", ring = "Ring", anamorphic = "Anamorphic", polygon = "Polygon" }
 enum StudioLight: String, Codable, CaseIterable { case off = "Natural", softbox = "Softbox", rembrandt = "Rembrandt", split = "Split", rim = "Rim", stage = "Stage" }
 

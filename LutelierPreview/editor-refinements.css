@@ -17,3 +17,5 @@
 .controls:has(.strength-control){max-height:265px}.inspector:has(.strength-control){max-height:325px}
 
 .depth-demo[data-texture=portrait]{background:radial-gradient(ellipse at 50% 40%,#fff 12%,#f8f8f8 25%,#111 45%,#050505 70%)}.depth-demo[data-texture=hair]{background:radial-gradient(ellipse at 50% 25%,#fff 4%,#bbb 10%,#151515 16%,#050505 24%)}.depth-engine-detail{font-size:13px;font-weight:600;line-height:1.5;margin:8px 0}
+
+.tabs button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;height:54px;padding:7px 3px;border-radius:24px}.tabs button svg{width:18px;height:20px;flex:none}.tabs button span{font-size:10px;line-height:1.2;white-space:nowrap}

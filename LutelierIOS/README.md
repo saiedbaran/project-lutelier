@@ -19,7 +19,7 @@ The app has no third-party Swift dependencies. The bundled LUTs and Studio refer
 
 | Area | Current behavior |
 | --- | --- |
-| Looks | Original + 114 baked 33³ LUTs: 26 Movies, 21 Cameras, 13 Color film, 11 Black & white, 12 Cinematic, and 31 additional looks. Search includes source descriptions. Previews use the imported photograph. |
+| Looks | Original + 114 baked 33³ LUTs: 26 Movies, 21 Cameras, 13 Color film, 11 Black & white, 12 Cinematic, and 31 additional looks. Swipeable categories filter the library; the Looks search field has been removed. Previews use the imported photograph. |
 | Movie/camera inspiration | Carries the desktop recipes for Blade Runner 2049, Dune, The Matrix, Amélie, The Godfather, Fujifilm, Leica, Hasselblad, Canon, Sony, Nikon, Ricoh, ARRI and others. These are creative emulations, not official manufacturer profiles or licensed studio LUTs. |
 | Import | System Photos picker, orientation-aware decoding, local originals and persistent edit recipes. Import custom 3D `.cube` files with 0–1 input domains and dimensions 2–65. |
 | Compare | Draggable before/after divider; zoom and pan in the edited view; double-tap zoom/reset. Undo, redo and reset. |
@@ -83,3 +83,5 @@ The launch screen shows a large lens logo, bold LUTELIER name and “The art of 
 Looks uses swipeable category buttons and a lower Liquid Glass Strength thumb, with no description beneath. Main tabs have equal widths and bold selection. Launch tagline is closer and all caps.
 
 Depth runs entirely on the iPhone: bundled Depth Anything V2 Small for scene depth, captured Apple portrait/hair mattes for fine coverage, and Vision accurate person segmentation as fallback. Saved refined maps survive reopening. Preserve portrait edges controls how coverage attenuates optical blur. No computer companion is included. PromptDA and Depth Pro remain unverified research candidates, not selectable engines. See [on-device implementation](DEPTH-REFINEMENT.md). Native build and physical-device quality/performance testing remain required.
+
+Main editor tabs use SF Symbols above their labels, matching the reference icon styles. All six tabs keep equal widths and bold/amber selection. The browser uses the same vectors as its sidebar.
