@@ -60,7 +60,7 @@ struct EditorView: View {
                             if selectingDepth && tab == .depth && !compare { DepthSelectionOverlay(image: image, visibleRegion: visibleRegion, selection: $depthSelection) }
                             if analysisTexture != .photo { VStack { Text(analysisTexture == .depth ? "Relative depth - white is near" : analysisTexture == .hair ? "Hair coverage - alpha matte" : "Portrait coverage - alpha matte").font(.caption2).padding(8).background(.black.opacity(0.65), in: Capsule()); Spacer() }.padding(12).allowsHitTesting(false) }
                             HStack(spacing: 8) {
-                                Text(compare ? "Slide to compare" : "Pinch to explore").font(.caption2).foregroundStyle(.secondary)
+                                Text(compare ? "Slide to compare" : "Drag to reframe · pinch to zoom").font(.caption2).foregroundStyle(.secondary)
                                 Spacer()
                                 Text(store.currentLook.name).font(.caption.weight(.medium))
                             }.padding(12).background(.ultraThinMaterial, in: Capsule()).padding(14).allowsHitTesting(false).zIndex(50)
