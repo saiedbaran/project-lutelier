@@ -5,6 +5,7 @@ struct GlassStrengthSlider: View {
     @Binding var value: Double
     var onEditingChanged: (Bool) -> Void
     @State private var editing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 8) {
@@ -20,8 +21,13 @@ struct GlassStrengthSlider: View {
                         .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 0.5))
                     Capsule().fill(Palette.amber.opacity(0.45)).frame(width: 16 + travel * min(1, max(0, value)), height: 12)
                     Capsule().fill(.clear).frame(width: 32, height: 24)
-                        .glassEffect(.regular.interactive(), in: Capsule())
-                        .scaleEffect(editing ? 1.12 : 1)
+                        .glassEffect(.regular.tint(Palette.amber).interactive(), in: Capsule())
+                        .overlay {
+                            Capsule().stroke(LinearGradient(colors: [.white.opacity(editing ? 0.85 : 0.4), Palette.amber.opacity(0.35), .white.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.75)
+                        }
+                        .shadow(color: Palette.amber.opacity(editing ? 0.45 : 0.14), radius: editing ? 10 : 3, y: 2)
+                        .scaleEffect(editing && !reduceMotion ? 1.12 : 1)
+                        .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.75), value: editing)
                         .offset(x: travel * min(1, max(0, value)))
                 }.frame(height: 44).contentShape(Rectangle())
                     .gesture(DragGesture(minimumDistance: 0).onChanged { gesture in
