@@ -22,6 +22,7 @@ final class EditorStore: ObservableObject {
     @Published var portraitPreview: UIImage?
     @Published var hairPreview: UIImage?
     @Published var matteStatus = "Analyze to find portrait edges"
+    @Published var depthRefinementMethod: DepthRefinementMethod = .contextual
     private var capturedMattes = PortraitMattes()
     @Published var busy = false
     @Published var error: String?
@@ -250,14 +251,16 @@ final class EditorStore: ObservableObject {
         guard let original, let existing = depth?.depth else { return }
         busy = true
         defer { busy = false }
-        let photo = selectedPhotoID, service = depthService
+        let photo = selectedPhotoID, service = depthService, method = depthRefinementMethod
         let crop = CGRect(x: region.minX * original.extent.width, y: (1 - region.maxY) * original.extent.height, width: region.width * original.extent.width, height: region.height * original.extent.height)
         do {
-            let mask: CIImage = try await withCheckedThrowingContinuation { continuation in
-                worker.async { continuation.resume(with: Result { try service.refineDepth(original, region: crop, existing: existing) }) }
+            let result: DepthRefinementResult = try await withCheckedThrowingContinuation { continuation in
+                worker.async { continuation.resume(with: Result { try service.refineDepth(original, region: crop, existing: existing, method: method) }) }
             }
             guard selectedPhotoID == photo else { return }
-            depth?.depth = mask; depthStatus = "On-device V2 crop refined • scale aligned and seam feathered • portrait/hair coverage preserved"
+            let mask = result.image
+            depth?.depth = mask
+            depthStatus = method == .contextual ? "On-device context crop refined • edges feathered" : "On-device detail fusion • \(result.acceptedTiles)/4 tiles accepted • \(result.rejectedTiles) rejected • experimental"
             let texture = try await render(mask, recipe: Recipe(), look: .original, depth: nil, max: 1800)
             guard selectedPhotoID == photo else { return }
             depthPreview = texture

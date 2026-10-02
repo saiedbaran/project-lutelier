@@ -41,8 +41,8 @@ final class DepthService {
         return DepthResult(subject: mask, depth: depth, explanation: explanation, portrait: portrait, hair: hair, matteExplanation: detail)
     }
 
-    func refineDepth(_ image: CIImage, region: CGRect, existing: CIImage) throws -> CIImage {
-        try localModel.refine(image, region: region, existing: existing)
+    func refineDepth(_ image: CIImage, region: CGRect, existing: CIImage, method: DepthRefinementMethod) throws -> DepthRefinementResult {
+        try localModel.refine(image, region: region, existing: existing, method: method)
     }
 
     func refine(_ image: CIImage, region: CGRect, existing: CIImage) throws -> CIImage {

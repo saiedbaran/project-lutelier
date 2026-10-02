@@ -14,13 +14,22 @@ In **Depth**, Analyze generates scene depth and portrait coverage. Inspect **Pho
 
 ## Regional refinement
 
-The same bundled model re-estimates a crop with 20% surrounding context. Two-pass robust scale/offset alignment reconciles its relative values with the existing texture. Flat or conflicting patches are rejected, the boundary is feathered, and full-resolution pixels outside the selection are preserved. Fusion uses a bounded 2048-pixel working grid. Portrait/hair coverage remains separate and unchanged.
+Choose between two modes after estimating depth and drawing a box:
 
-This is contextual crop refinement, not the learned PatchFusion architecture. A crop can lose context or invent edges. Inspect seams, hair, glasses, transparency and occlusions before relying on it.
+- **Context crop**: one new inference over the selection with 20% surrounding context. Robust scale/offset fitting aligns it to the existing relative depth; the join is feathered.
+- **Overlapping tiles (experimental)**: one contextual inference followed by four overlapping crops, each 68% of the contextual region's width/height (about 36% overlap). Fit the contextual prediction to the saved map, then fit each detail crop to that fixed contextual anchor. Accumulate weighted predictions rather than overwriting tiles in sequence. The anchor retains a baseline weight; support-edge feathering, alignment residual/correlation and per-pixel disagreement reduce unstable contributions. Tile-order independence and exact array preservation outside the selection have dedicated XCTest cases.
+
+Both methods allocate the working grid to the contextual **region**, capped at 2048 pixels on its longest side without upscaling beyond source resolution. This avoids spending most of the grid on the unselected photograph. The resulting regional image blends into the original full-resolution map only inside the selected box. Depth beyond that box and portrait/hair coverage remain unchanged.
+
+Inference uses the bundled Core ML model with all compute units enabled (Core ML chooses scheduling; Neural Engine-only execution is not promised). The same model instance runs sequentially, with one detail tile in flight. Fusion/array alignment executes in Swift on the iPhone CPU and image rendering uses Core Image. No computer, server, network transfer, Python runtime, CUDA or additional model weights are required.
+
+Alignment rejects flat patches, reversed disparity and insufficient context. It uses two-pass 80% residual trimming, positive scale bounds 0.05–20, correlation at least 0.35 and trimmed normalized RMSE at most 0.12. These thresholds and consistency weights are **uncalibrated heuristics**, not learned confidence. A failing tile is omitted and counted; no accepted detail tiles means no saved change. Serious/critical thermal state prevents starting Overlapping tiles; critical heating during the run aborts before the map is replaced. Context crop remains the faster default. This is a still-photo operation, not live video depth.
+
+This original coarse/fine fusion borrows the multi-scale/overlap idea from the literature. It is **not the learned PatchFusion or PatchRefiner V2 architecture**, and no published accuracy/latency claim transfers to it. Crops can lose context or invent depth boundaries; consistency with a wrong coarse map cannot prove geometric accuracy. Hair alpha does not provide hair depth. Inspect seams, glasses, transparency, texture edges and occlusions before using the result. Device benchmarks and paired portrait-quality comparisons remain required.
 
 ## Other models
 
-Prompt Depth Anything is a promising LiDAR-guided candidate, but no verified Core ML conversion or iPhone benchmark is bundled. It requires calibrated metric LiDAR, which normalized disparity cannot replace. Depth Pro has no verified runtime in this app. MODNet and Robust Video Matting are not bundled; conversions, licensing and device evaluation remain separate work. These methods are not presented as working options.
+**PatchRefiner V2 (ICLR 2026)** is a newer lightweight refinement candidate; its official inference uses a Python/distributed GPU launcher, and no verified Core ML/iPhone integration is included here. **Prompt Depth Anything** is a promising LiDAR-guided candidate, but no verified Core ML conversion or iPhone benchmark is bundled. It requires calibrated metric LiDAR, which normalized disparity cannot replace. Depth Pro has no verified runtime in this app. MODNet and Robust Video Matting are not bundled; conversions, licensing and device evaluation remain separate work. These methods are not presented as working options.
 
 ## Verification and provenance
 
@@ -33,3 +42,6 @@ Apple's unmodified model package and the Small model's Apache 2.0 license are bu
 - [Vision person segmentation](https://developer.apple.com/documentation/vision/vngeneratepersonsegmentationrequest)
 - [PromptDA](https://github.com/DepthAnything/PromptDA)
 - [Apple Depth Pro](https://github.com/apple/ml-depth-pro)
+
+- [PatchFusion coarse/fine learned fusion](https://arxiv.org/abs/2312.02284)
+- [PatchRefiner V2 official release and inference](https://github.com/zhyever/PatchRefinerV2)

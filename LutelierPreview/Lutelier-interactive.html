@@ -248,17 +248,20 @@ setTimeout(finishLaunch,1600);launchBrand.addEventListener('click',finishLaunch)
 
 actions['look-category']=value=>{lookCategory=value;renderControls();};
 
-let inspectionTexture='Depth';
+let inspectionTexture='Depth',refinementMethod='Context crop';
 const engineRenderControls=renderControls;
 renderControls=()=>{engineRenderControls();if(state.tab==='Depth'){
  const panel=document.createElement('div');panel.className='depth-engines';
  panel.innerHTML='<div class="caption">ON-DEVICE DEPTH</div><p class="depth-engine-detail">Depth Anything V2 Small + Apple portrait edges</p><p class="caption">Core ML scene depth, captured portrait/hair mattes and Vision fallback. All depth processing stays on the iPhone.</p><div class="pills">'+pill('Preserve portrait edges',state.protectPortraitEdges,'protect-portrait')+'</div><div class="pills">'+['Photo','Depth','Portrait','Hair'].map(t=>pill(t,t===(showDepthTexture?inspectionTexture:'Photo'),'matte-preview',t)).join('')+'</div><p class="caption">Browser textures are illustrations. Native Hair appears only when the photo contains an Apple hair matte.</p>';
- $('#controls').prepend(panel);
+ const modes=document.createElement('div');modes.className='depth-refinement-modes';
+ modes.innerHTML='<div class="caption">REGIONAL REFINEMENT · ON IPHONE</div><div class="pills">'+['Context crop','Overlapping tiles'].map(t=>pill(t,t===refinementMethod,'depth-method',t)).join('')+'</div><p class="caption">'+(refinementMethod==='Overlapping tiles'?'Experimental: context + 4 overlapping detail crops. Core ML inference runs sequentially on iPhone; inconsistent tiles are rejected. This is not the trained PatchFusion network.':'One contextual crop, aligned to the saved map. Choose Overlapping tiles for additional detail passes.')+'</p>';
+ panel.append(modes);$('#controls').prepend(panel);
 }};
 function inspectMatte(value){inspectionTexture=value;showDepthTexture=value!=='Photo';depthOverlay.hidden=!showDepthTexture;depthOverlay.dataset.texture=value.toLowerCase();depthOverlay.querySelector('span').textContent='Illustrative '+value.toLowerCase()+' texture - native on-device analysis required';renderControls();}
 actions['matte-preview']=inspectMatte;
 actions['depth-texture']=()=>inspectMatte(showDepthTexture?'Photo':'Depth');
 actions['protect-portrait']=()=>{checkpoint();state.protectPortraitEdges=!state.protectPortraitEdges;renderControls();toast('Native blur '+(state.protectPortraitEdges?'preserves portrait/hair coverage.':'follows depth planes without portrait protection.'));};
 actions.analyze=()=>{inspectMatte('Depth');toast('On iPhone: Core ML depth + captured Apple mattes or Vision segmentation. This browser shows an illustrative texture.');};
-actions['depth-refine']=()=>toast(depthSelection?'Selection ready. Native Core ML refines this crop on iPhone; portrait/hair coverage remains separate.':'Enable Box select and draw a region on the photo first.');
+actions['depth-method']=value=>{refinementMethod=value;renderControls();};
+actions['depth-refine']=()=>toast(depthSelection?(refinementMethod==='Overlapping tiles'?'Native iPhone workflow: 1 contextual + 4 overlapping Core ML detail crops, consistency-weighted fusion and unchanged depth outside the box. Experimental; no inference in this browser.':'Native iPhone workflow: one context crop, scale alignment and feathered boundary. No inference in this browser.'):'Enable Box select and draw a region on the photo first.');
 </script></body></html>

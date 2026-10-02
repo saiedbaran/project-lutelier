@@ -41,27 +41,62 @@ final class LocalDepthModel {
         return Self.image(values, width: w, height: h).transformed(by: CGAffineTransform(scaleX: image.extent.width / CGFloat(w), y: image.extent.height / CGFloat(h)))
             .transformed(by: CGAffineTransform(translationX: image.extent.minX, y: image.extent.minY)).cropped(to: image.extent)
     }
-    func refine(_ image: CIImage, region: CGRect, existing: CIImage) throws -> CIImage {
+    func refine(_ image: CIImage, region: CGRect, existing: CIImage, method: DepthRefinementMethod) throws -> DepthRefinementResult {
         let selection = region.intersection(image.extent)
         guard selection.width >= 48, selection.height >= 48 else { throw LutelierError.message("Select a larger area for depth refinement.") }
-        // Context around the box gives the model a stable reference for crop-scale alignment.
+        if method == .overlapping {
+            guard ProcessInfo.processInfo.thermalState != .serious, ProcessInfo.processInfo.thermalState != .critical else {
+                throw LutelierError.message("Let your iPhone cool down, or choose Context crop for fewer depth passes.")
+            }
+        }
         let crop = selection.insetBy(dx: -selection.width * 0.2, dy: -selection.height * 0.2).intersection(image.extent)
-        let local = try estimate(image.cropped(to: crop))
-        let maxSide: CGFloat = 2048, scale = min(1, maxSide / max(image.extent.width, image.extent.height))
-        let w = Int(image.extent.width * scale), h = Int(image.extent.height * scale)
-        let global = samples(existing, width: w, height: h)
-        let alignedLocal = local.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)).transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        var patch = [Float](repeating: 0, count: w * h)
-        patch.withUnsafeMutableBytes { context.render(alignedLocal, toBitmap: $0.baseAddress!, rowBytes: w * 4, bounds: CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)), format: .Rf, colorSpace: CGColorSpaceCreateDeviceGray()) }
-        let rect = CGRect(x: (selection.minX - image.extent.minX) * scale, y: (selection.minY - image.extent.minY) * scale, width: selection.width * scale, height: selection.height * scale)
-        let support = CGRect(x: (crop.minX - image.extent.minX) * scale, y: (crop.minY - image.extent.minY) * scale, width: crop.width * scale, height: crop.height * scale)
-        let fused = try DepthPatchFusion.merge(global: global, local: patch, width: w, height: h, selection: rect, support: support)
-        let refined = Self.image(fused, width: w, height: h).transformed(by: CGAffineTransform(scaleX: image.extent.width / CGFloat(w), y: image.extent.height / CGFloat(h)))
-            .transformed(by: CGAffineTransform(translationX: image.extent.minX, y: image.extent.minY)).cropped(to: image.extent)
-        // Preserve the original full-resolution texture outside the box, including fine edges.
+        // Spend the bounded working grid on the selected ROI, not the entire 48MP photograph.
+        let scale = min(1, 2048 / max(crop.width, crop.height))
+        let w = max(1, Int(crop.width * scale)), h = max(1, Int(crop.height * scale))
+        let sx = CGFloat(w) / crop.width, sy = CGFloat(h) / crop.height
+        let bounds = CGRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h))
+        func grid(_ rect: CGRect) -> CGRect {
+            CGRect(x: (rect.minX - crop.minX) * sx, y: (rect.minY - crop.minY) * sy, width: rect.width * sx, height: rect.height * sy)
+        }
+        func infer(_ rect: CGRect) throws -> [Float] {
+            try autoreleasepool {
+                let map = try estimate(image.cropped(to: rect))
+                let fitted = map.transformed(by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY))
+                    .transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+                var values = [Float](repeating: 0, count: w * h)
+                values.withUnsafeMutableBytes { context.render(fitted, toBitmap: $0.baseAddress!, rowBytes: w * 4, bounds: bounds, format: .Rf, colorSpace: CGColorSpaceCreateDeviceGray()) }
+                return values
+            }
+        }
+        let global = samples(existing.cropped(to: crop), width: w, height: h)
+        let coarse = try infer(crop)
+        let rect = grid(selection)
+        let fused: [Float]
+        var accepted = 0, rejected = 0
+        if method == .contextual {
+            fused = try DepthPatchFusion.merge(global: global, local: coarse, width: w, height: h, selection: rect, support: bounds)
+        } else {
+            let alignment = try DepthPatchFusion.alignment(global: global, local: coarse, width: w, height: h, support: bounds)
+            let anchor = coarse.map { min(1, max(0, alignment.value($0))) }
+            var accumulator = DepthPatchFusion.Accumulator(anchor: anchor, width: w, height: h)
+            // Sequential inference keeps one model instance and one tile buffer in flight.
+            for tile in DepthPatchFusion.tiles(in: crop) {
+                guard ProcessInfo.processInfo.thermalState != .critical else { throw LutelierError.message("Depth refinement paused because your iPhone is too hot. The previous depth map is unchanged.") }
+                do { let patch = try infer(tile); try accumulator.add(local: patch, support: grid(tile)); accepted += 1 }
+                catch { rejected += 1 } // Consistency rejection retains the contextual anchor.
+            }
+            guard ProcessInfo.processInfo.thermalState != .critical else { throw LutelierError.message("Your iPhone became too hot. The previous depth map is unchanged.") }
+            guard accepted > 0 else { throw LutelierError.message("The detail tiles could not be aligned reliably. The previous depth is unchanged; try Context crop or a wider selection.") }
+            fused = accumulator.finish(original: global, selection: rect)
+        }
+        let refined = Self.image(fused, width: w, height: h)
+            .transformed(by: CGAffineTransform(scaleX: crop.width / CGFloat(w), y: crop.height / CGFloat(h)))
+            .transformed(by: CGAffineTransform(translationX: crop.minX, y: crop.minY)).cropped(to: image.extent)
+        // Full-resolution depth outside the box is copied from the prior map, never resized.
         let mask = CIImage(color: .white).cropped(to: selection)
             .composited(over: CIImage(color: .black).cropped(to: image.extent))
-        return refined.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: existing, kCIInputMaskImageKey: mask]).cropped(to: image.extent)
+        let result = refined.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: existing, kCIInputMaskImageKey: mask]).cropped(to: image.extent)
+        return DepthRefinementResult(image: result, acceptedTiles: accepted, rejectedTiles: rejected)
     }
     private func samples(_ image: CIImage, width: Int, height: Int) -> [Float] {
         let fitted = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY)).transformed(by: CGAffineTransform(scaleX: CGFloat(width) / image.extent.width, y: CGFloat(height) / image.extent.height))
@@ -72,40 +107,5 @@ final class LocalDepthModel {
     private static func image(_ values: [Float], width: Int, height: Int) -> CIImage {
         let data = values.withUnsafeBytes { Data($0) }
         return CIImage(bitmapData: data, bytesPerRow: width * 4, size: CGSize(width: CGFloat(width), height: CGFloat(height)), format: .Rf, colorSpace: CGColorSpaceCreateDeviceGray())
-    }
-}
-
-enum DepthPatchFusion {
-    static func merge(global: [Float], local: [Float], width: Int, height: Int, selection: CGRect, support: CGRect) throws -> [Float] {
-        guard global.count == width * height, local.count == global.count else { throw LutelierError.message("Depth texture sizes do not match.") }
-        var pairs: [(Double, Double)] = []
-        for y in stride(from: max(0, Int(support.minY)), to: min(height, Int(support.maxY)), by: 3) {
-            for x in stride(from: max(0, Int(support.minX)), to: min(width, Int(support.maxX)), by: 3) {
-                let a = Double(local[y * width + x]), b = Double(global[y * width + x])
-                if a.isFinite && b.isFinite { pairs.append((a,b)) }
-            }
-        }
-        guard pairs.count >= 16 else { throw LutelierError.message("Not enough context to align this depth patch.") }
-        var scale = 1.0, bias = 0.0
-        for pass in 0..<2 {
-            let n = Double(pairs.count), sx = pairs.reduce(0) { $0 + $1.0 }, sy = pairs.reduce(0) { $0 + $1.1 }
-            let variance = pairs.reduce(0) { $0 + $1.0 * $1.0 } - sx * sx / n
-            guard variance > 0.00001 else { throw LutelierError.message("This crop is too flat to align safely. Include nearby objects or edges.") }
-            scale = (pairs.reduce(0) { $0 + $1.0 * $1.1 } - sx * sy / n) / variance; bias = (sy - scale * sx) / n
-            guard scale > 0.05 && scale < 20 else { throw LutelierError.message("The crop conflicts with the existing depth. Try a wider box.") }
-            if pass == 0 {
-                let residuals = pairs.map { abs(scale * $0.0 + bias - $0.1) }.sorted(), threshold = max(0.005, residuals[residuals.count * 8 / 10])
-                pairs = pairs.filter { abs(scale * $0.0 + bias - $0.1) <= threshold }
-            }
-        }
-        var result = global
-        let feather = max(2, min(selection.width, selection.height) * 0.12)
-        for y in max(0, Int(selection.minY))..<min(height, Int(selection.maxY)) { for x in max(0, Int(selection.minX))..<min(width, Int(selection.maxX)) {
-            let distance = min(CGFloat(x) - selection.minX, selection.maxX - CGFloat(x), CGFloat(y) - selection.minY, selection.maxY - CGFloat(y))
-            let t = Float(min(1, max(0, distance / feather))), weight = t * t * (3 - 2 * t), i = y * width + x
-            let value = Float(scale * Double(local[i]) + bias)
-            if value.isFinite { result[i] = global[i] * (1 - weight) + min(1, max(0, value)) * weight }
-        } }
-        return result
     }
 }

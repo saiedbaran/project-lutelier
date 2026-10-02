@@ -123,6 +123,44 @@ final class RenderTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Do not substitute the reference person's face"))
     }
 
+    func testOverlappingFusionIsOrderIndependentAndPreservesOutsideBox() throws {
+        let w = 60, h = 60, support = CGRect(x: 0, y: 0, width: 60, height: 60)
+        let selection = CGRect(x: 12, y: 12, width: 36, height: 36)
+        let anchor = (0..<(w*h)).map { Float($0 % w) / 100 + Float($0 / w) / 200 }
+        var first = anchor.map { $0 / 2 + 0.1 }, second = anchor.map { $0 / 3 + 0.05 }
+        first[30*w+30] += 0.03; second[30*w+30] += 0.015
+        var forward = DepthPatchFusion.Accumulator(anchor: anchor, width: w, height: h)
+        try forward.add(local: first, support: support); try forward.add(local: second, support: support)
+        var reverse = DepthPatchFusion.Accumulator(anchor: anchor, width: w, height: h)
+        try reverse.add(local: second, support: support); try reverse.add(local: first, support: support)
+        let a = forward.finish(original: anchor, selection: selection), b = reverse.finish(original: anchor, selection: selection)
+        XCTAssertGreaterThan(a[30*w+30], anchor[30*w+30] + 0.005)
+        for i in a.indices {
+            XCTAssertTrue(a[i].isFinite); XCTAssertEqual(a[i], b[i], accuracy: 0.00001)
+            if !selection.contains(CGPoint(x: CGFloat(i % w), y: CGFloat(i / w))) { XCTAssertEqual(a[i], anchor[i]) }
+        }
+    }
+
+    func testUnsafeTilesAreRejectedWithoutMutatingFusion() throws {
+        let w = 60, h = 60, bounds = CGRect(x: 0, y: 0, width: 60, height: 60)
+        let anchor = (0..<(w*h)).map { Float($0 % w) / Float(w) }
+        var fusion = DepthPatchFusion.Accumulator(anchor: anchor, width: w, height: h)
+        XCTAssertThrowsError(try fusion.add(local: anchor.map { 1 - $0 }, support: bounds))
+        XCTAssertThrowsError(try fusion.add(local: [Float](repeating: .nan, count: w*h), support: bounds))
+        XCTAssertThrowsError(try fusion.add(local: [Float](repeating: 0.5, count: w*h), support: bounds))
+        let unchanged = fusion.finish(original: anchor, selection: bounds)
+        for i in anchor.indices { XCTAssertEqual(unchanged[i], anchor[i], accuracy: 0.000001) }
+    }
+
+    func testDetailTilesOverlapAndStayInsideTranslatedROI() {
+        let roi = CGRect(x: 100, y: 50, width: 600, height: 400)
+        let tiles = DepthPatchFusion.tiles(in: roi)
+        XCTAssertEqual(tiles.count, 4)
+        for tile in tiles { XCTAssertEqual(tile.intersection(roi), tile); XCTAssertLessThan(tile.width, roi.width) }
+        XCTAssertFalse(tiles[0].intersection(tiles[1]).isEmpty)
+        XCTAssertFalse(tiles[0].intersection(tiles[2]).isEmpty)
+    }
+
     func testStudioLibraryHasOneHundredUniqueCreditedPhotos() throws {
         let url = try XCTUnwrap(Bundle.main.url(forResource: "templates", withExtension: "json", subdirectory: "Studio"))
         let templates = try JSONDecoder().decode([StudioTemplate].self, from: Data(contentsOf: url))

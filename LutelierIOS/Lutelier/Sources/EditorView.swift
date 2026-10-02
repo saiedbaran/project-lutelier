@@ -202,8 +202,11 @@ struct EditorView: View {
                                 if store.hairPreview != nil { Text("Hair").tag(AnalysisTexture.hair) }
                             }.pickerStyle(.segmented)
                             Toggle("Box select region", isOn: $selectingDepth)
+                            Picker("Depth refinement", selection: $store.depthRefinementMethod) {
+                                ForEach(DepthRefinementMethod.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                            }.pickerStyle(.segmented).disabled(store.busy)
                             Button { guard let region = depthSelection else { return }; Task { await store.refine(normalized: region) } } label: { Label("Refine selected depth", systemImage: "viewfinder") }.disabled(!store.hasDepth || store.busy || depthSelection == nil)
-                            Text("Draw a box over an edge. Local crop inference aligns with the global map and preserves depth outside the selection. Captured portrait/hair mattes remain separate and protect edges when enabled.").font(.caption2).foregroundStyle(.secondary)
+                            Text(store.depthRefinementMethod == .overlapping ? "Experimental: one context crop + four overlapping detail crops, aligned and blended on iPhone. Inspect the result; finer detail is not guaranteed. Depth outside the box and portrait/hair mattes are preserved." : "One contextual crop on iPhone. Select Overlapping tiles for more detail passes. Depth outside the box and portrait/hair mattes are preserved.").font(.caption2).foregroundStyle(.secondary)
                         case .light:
                             Text("Your pocket studio").font(.headline)
                             ScrollView(.horizontal, showsIndicators: false) { HStack { ForEach(StudioLight.allCases, id: \.self) { light in Button(light.rawValue) { store.edit { $0.light = light } }.buttonStyle(.bordered).tint(store.recipe.light == light ? Palette.amber : .gray) } } }
