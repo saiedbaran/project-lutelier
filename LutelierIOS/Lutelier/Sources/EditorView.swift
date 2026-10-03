@@ -32,6 +32,7 @@ private struct DepthDisclosureStyle: DisclosureGroupStyle {
 
 struct EditorView: View {
     @Namespace private var toolSelection
+    @Namespace private var categorySelection
     @Namespace private var chrome
     @State private var tabFrames: [ToolTab: CGRect] = [:]
     @GestureState private var hoveredTab: ToolTab?
@@ -69,6 +70,7 @@ struct EditorView: View {
         _tab = State(initialValue: initialTab)
         _depthSection = State(initialValue: initialDepthSection)
     }
+    var lookCategories: [String] { ["All"] + Array(Set(store.looks.map(\.category))).filter { $0 != "All" }.sorted() }
     var filteredLooks: [Look] { store.looks.filter { category == "All" || $0.category == category } }
 
     var body: some View {
@@ -81,7 +83,7 @@ struct EditorView: View {
                     }.ignoresSafeArea().allowsHitTesting(false)
                 }
                 VStack(spacing: expandedPhoto ? 8 : 12) {
-                    if !expandedPhoto { header }
+                    if !expandedPhoto { header } else { fullscreenBrand }
                     if let image = store.preview {
                         photoStage(image)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -197,12 +199,47 @@ struct EditorView: View {
         }.coordinateSpace(name: "photo-stage")
     }
 
+    private var fullscreenBrand: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("LUTELIER").font(.system(size: 20, weight: .heavy)).tracking(0.8)
+            Text("THE ART OF PHOTOGRAPHY").font(.system(size: 8, weight: .medium)).tracking(2).foregroundStyle(.secondary)
+        }.foregroundStyle(.white).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10)
+    }
+
+    private var fullscreenCategories: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                HStack(spacing: 24) {
+                    ForEach(lookCategories, id: \.self) { item in
+                        Button {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { category = item }
+                        } label: {
+                            VStack(spacing: 7) {
+                                Text(item).font(.subheadline.weight(category == item ? .semibold : .regular))
+                                    .foregroundStyle(category == item ? .white : .white.opacity(0.55))
+                                ZStack {
+                                    Capsule().fill(.clear).frame(height: 3)
+                                    if category == item { Capsule().fill(Palette.amber).frame(height: 3).matchedGeometryEffect(id: "category", in: categorySelection) }
+                                }
+                            }.fixedSize(horizontal: true, vertical: false).frame(minHeight: 44)
+                        }.buttonStyle(.plain).id(item).accessibilityAddTraits(category == item ? .isSelected : [])
+                    }
+                }.padding(.horizontal, 18)
+            }.onAppear { proxy.scrollTo(category, anchor: .center) }
+                .onChange(of: category) { _, value in
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { proxy.scrollTo(value, anchor: .center) }
+                }
+        }.frame(height: 44)
+    }
+
     private var expandedLooks: some View {
+        VStack(spacing: 0) {
+            fullscreenCategories
         GeometryReader { geometry in
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     LazyHStack(alignment: .center, spacing: 12) {
-                        ForEach(store.looks) { look in
+                        ForEach(filteredLooks) { look in
                             let selected = store.recipe.lookID == look.id
                             Button { selectLook(look) } label: {
                                 VStack(spacing: 7) {
@@ -228,12 +265,16 @@ struct EditorView: View {
                         }
                     }.padding(.horizontal, max(0, (geometry.size.width - 90) / 2)).padding(.vertical, 12)
                 }.scrollClipDisabled()
-                    .onAppear { proxy.scrollTo(store.recipe.lookID, anchor: .center) }
+                    .onAppear { proxy.scrollTo(filteredLooks.first(where: { $0.id == store.recipe.lookID })?.id ?? filteredLooks.first?.id ?? "original", anchor: .center) }
                     .onChange(of: store.recipe.lookID) { _, selected in
                         withAnimation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85)) { proxy.scrollTo(selected, anchor: .center) }
                     }
+                    .onChange(of: category) { _, _ in
+                        proxy.scrollTo(filteredLooks.first(where: { $0.id == store.recipe.lookID })?.id ?? filteredLooks.first?.id ?? "original", anchor: .center)
+                    }
             }
         }.frame(height: 140)
+        }
     }
 
     private var expandedToolbar: some View {
@@ -520,16 +561,20 @@ struct EditorView: View {
     }
     private var lookControls: some View {
         VStack(spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(["All"] + Array(Set(store.looks.map(\.category))).filter { $0 != "All" }.sorted(), id: \.self) { item in
-                        Button { category = item } label: {
-                            Text(item).font(.caption.weight(category == item ? .bold : .regular))
-                                .padding(.horizontal, 12).frame(minHeight: 44)
-                                .foregroundStyle(category == item ? Palette.amber : .secondary)
-                        }.buttonStyle(ToolGlassPressStyle())
+            HStack {
+                Menu {
+                    Picker("Look category", selection: $category) {
+                        ForEach(lookCategories, id: \.self) { Text($0).tag($0) }
                     }
-                }
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "square.stack").font(.subheadline)
+                        Text(category == "All" ? "All looks" : category).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                    }.padding(.horizontal, 8).frame(height: 28)
+                }.buttonStyle(.glass).accessibilityLabel("Look category")
+                Spacer(minLength: 8)
+                Text("\(filteredLooks.count) looks").font(.caption).monospacedDigit().foregroundStyle(.secondary)
             }.frame(height: 44)
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 10) {
