@@ -1,0 +1,12 @@
+Depth Anything 3 Small: ByteDance-Seed / depth-anything/DA3-SMALL (Apache-2.0).
+Core ML conversion: Daisuke Majima, mlboydaisuke/Depth-Anything-3-Small-CoreML.
+Revision: 768d44df07d8d97f1cb6c1e231cfcd7928c3053e.
+See LICENSE-DepthAnything3.txt.
+
+Depth Pro research model: Apple, apple/DepthPro.
+Source conversion: KeighBee/coreml-DepthPro, revision 59007df396f15fee4ac1d40e8958ef679b13d462.
+This derivative retains the conversion's 10% pruning and linear quantization.
+Local modification: separate full-image encoder and overlapping tile decoder;
+relative inverse-depth output normalized after reconstruction, not metric metres.
+See LICENSE-DepthPro.txt for the original research model terms.
+Reproduction: LutelierIOS/tools/prepare_depth_models.py --depth-pro.

@@ -77,3 +77,8 @@ LutelierIOS/studio-research/
 LutelierPreview/cover-transition.jpg
 LutelierPreview/camera-auto.jpg
 LutelierPreview/camera-controls.jpg
+
+# Reproducible Core ML builds (see LutelierIOS/tools/prepare_depth_models.py)
+LutelierIOS/Lutelier/Resources/Models/DepthAnythingV3_small_504.mlmodelc/
+LutelierIOS/Lutelier/Resources/Models/DepthProEncoder.mlmodelc/
+LutelierIOS/Lutelier/Resources/Models/DepthProDecoder.mlmodelc/

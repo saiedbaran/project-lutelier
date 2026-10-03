@@ -44,10 +44,10 @@ struct CameraLensPressStyle: ButtonStyle {
         configuration.label
             .background {
                 Circle().fill(AngularGradient(colors: [.teal, .blue, .purple, .indigo, .teal], center: .center))
-                    .frame(width: 64, height: 64).blur(radius: 17).opacity(configuration.isPressed ? 0.85 : 0)
+                    .frame(width: 64, height: 64).blur(radius: 17).opacity(configuration.isPressed ? 0.95 : 0.65)
             }
             .shadow(color: .black.opacity(configuration.isPressed ? 0 : 0.65), radius: 9, x: shadowX, y: shadowY)
-            .rotationEffect(.degrees(configuration.isPressed ? 90 : 0))
+            .rotationEffect(.degrees(configuration.isPressed && !reduceMotion ? 90 : 0))
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
             .contentShape(Circle())
     }
@@ -66,13 +66,11 @@ struct Look: Codable, Identifiable, Hashable {
 }
 
 enum ToolTab: String, CaseIterable {
-    case looks = "Looks", grain = "Grain", depth = "Depth", light = "Light", studio = "Studio", adjust = "Adjust"
+    case looks = "Looks", depth = "Depth", adjust = "Adjust", studio = "Studio"
     var symbol: String {
         switch self {
         case .looks: "camera.filters"
-        case .grain: "aqi.medium"
         case .depth: "viewfinder"
-        case .light: "sun.max"
         case .studio: "sparkle"
         case .adjust: "slider.horizontal.3"
         }
@@ -104,7 +102,7 @@ struct Recipe: Codable, Equatable {
     var bokehBloom = 0.0
     var highlightSensitivity = 0.7
     var anamorphicRatio = 2.0
-    var apertureBlades = 6.0
+    var apertureBlades = 6
     var protectPortraitEdges = true
     var light = StudioLight.off
     var lightPower = 0.5
@@ -135,7 +133,7 @@ struct Recipe: Codable, Equatable {
         bokehBloom = try c.decodeIfPresent(Double.self, forKey: .bokehBloom) ?? 0
         highlightSensitivity = try c.decodeIfPresent(Double.self, forKey: .highlightSensitivity) ?? 0.7
         anamorphicRatio = try c.decodeIfPresent(Double.self, forKey: .anamorphicRatio) ?? 2
-        apertureBlades = try c.decodeIfPresent(Double.self, forKey: .apertureBlades) ?? 6
+        apertureBlades = min(9, max(3, Int((try c.decodeIfPresent(Double.self, forKey: .apertureBlades) ?? 6).rounded())))
         protectPortraitEdges = try c.decodeIfPresent(Bool.self, forKey: .protectPortraitEdges) ?? true
         lightPower = try c.decodeIfPresent(Double.self, forKey: .lightPower) ?? 0.5
         lightAngle = try c.decodeIfPresent(Double.self, forKey: .lightAngle) ?? 0.3
@@ -143,10 +141,31 @@ struct Recipe: Codable, Equatable {
 }
 
 struct ToolGlassPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.background {
-            if configuration.isPressed { Capsule().fill(.clear).glassEffect(.regular, in: Capsule()) }
-        }
+        configuration.label
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .contentShape(Capsule())
+            .hoverEffect(.highlight)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .opacity(isEnabled ? 1 : 0.4)
+            .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+/// One shared glass island with a native interactive overlay on the pressed item.
+struct GlassIslandButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Capsule())
+            .glassEffect(configuration.isPressed ? .regular.interactive() : .identity, in: Capsule())
+            .hoverEffect(.highlight)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .opacity(isEnabled ? 1 : 0.35)
+            .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.8), value: configuration.isPressed)
     }
 }
 
@@ -171,7 +190,39 @@ enum Palette {
 }
 
 extension View {
+    func glassIsland() -> some View {
+        self.padding(4).glassEffect(.regular.interactive(), in: Capsule())
+            .buttonStyle(GlassIslandButtonStyle())
+    }
     func lutelierGlass() -> some View {
         self.glassEffect(.regular, in: .rect(cornerRadius: 28))
+    }
+}
+
+/// Let UIKit own the system tab selection, liquid lens, and accessibility semantics.
+struct NativeToolTabs: UIViewRepresentable {
+    @Binding var selection: ToolTab
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIView(context: Context) -> UITabBar {
+        let bar = UITabBar()
+        bar.delegate = context.coordinator
+        bar.overrideUserInterfaceStyle = .dark
+        bar.tintColor = UIColor(Palette.amber)
+        bar.items = ToolTab.allCases.enumerated().map { index, tab in
+            UITabBarItem(title: tab.rawValue, image: UIImage(systemName: tab.symbol), tag: index)
+        }
+        bar.layer.cornerRadius = 28; bar.layer.cornerCurve = .continuous; bar.clipsToBounds = true
+        return bar
+    }
+    func updateUIView(_ bar: UITabBar, context: Context) {
+        context.coordinator.parent = self
+        bar.selectedItem = bar.items?[ToolTab.allCases.firstIndex(of: selection) ?? 0]
+    }
+    final class Coordinator: NSObject, UITabBarDelegate {
+        var parent: NativeToolTabs
+        init(_ parent: NativeToolTabs) { self.parent = parent }
+        func tabBar(_ tabBar: UITabBar, didSelect item: UITabBarItem) {
+            parent.selection = ToolTab.allCases[item.tag]
+        }
     }
 }

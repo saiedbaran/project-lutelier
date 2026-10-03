@@ -32,7 +32,7 @@ struct GlassStrengthSlider: View {
                 }.frame(height: 44).contentShape(Rectangle())
                     .gesture(DragGesture(minimumDistance: 0).onChanged { gesture in
                         if !editing { editing = true; onEditingChanged(true) }
-                        value = min(1, max(0, (gesture.location.x - 16) / travel))
+                        value = SliderDetent.value((gesture.location.x - 16) / travel, in: 0...1, defaultValue: 1)
                     }.onEnded { _ in editing = false; onEditingChanged(false) })
             }.frame(height: 44)
         }.accessibilityElement(children: .ignore).accessibilityLabel("Strength")
@@ -42,5 +42,29 @@ struct GlassStrengthSlider: View {
                 switch direction { case .increment: value = min(1, value + 0.05); case .decrement: value = max(0, value - 0.05); @unknown default: break }
                 onEditingChanged(false)
             }.onDisappear { if editing { editing = false; onEditingChanged(false) } }
+    }
+}
+
+/// Shared detents for editor and capture controls, including VoiceOver changes.
+enum SliderDetent {
+    static func value(_ proposed: Double, in range: ClosedRange<Double>, defaultValue: Double, step: Double? = nil) -> Double {
+        let bounded = min(range.upperBound, max(range.lowerBound, proposed))
+        if let step { return min(range.upperBound, max(range.lowerBound, (bounded / step).rounded() * step)) }
+        let radius = (range.upperBound - range.lowerBound) * 0.018
+        let anchors = [defaultValue, 0].filter { range.contains($0) }
+        return anchors.min(by: { abs($0-bounded) < abs($1-bounded) }).flatMap { abs($0-bounded) <= radius ? $0 : nil } ?? bounded
+    }
+}
+struct SnapSlider: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var defaultValue: Double = 0
+    var step: Double? = nil
+    var onEditingChanged: (Bool) -> Void = { _ in }
+    var body: some View {
+        Slider(value: Binding(get: { value }, set: { value = SliderDetent.value($0, in: range, defaultValue: defaultValue, step: step) }), in: range, step: step ?? (range.upperBound-range.lowerBound)/10000, onEditingChanged: onEditingChanged)
+            .onChange(of: value) { old, new in
+                if (new == defaultValue || new == 0) && new != old { UISelectionFeedbackGenerator().selectionChanged() }
+            }
     }
 }

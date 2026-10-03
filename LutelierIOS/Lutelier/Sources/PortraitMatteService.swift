@@ -23,7 +23,7 @@ enum PortraitMatteService {
             portrait = try? AVPortraitEffectsMatte(fromDictionaryRepresentation: info)
         }
         if hair == nil, let info = CGImageSourceCopyAuxiliaryDataInfoAtIndex(source, 0, kCGImageAuxiliaryDataTypeSemanticSegmentationHairMatte) as? [AnyHashable: Any] {
-            hair = try? AVSemanticSegmentationMatte(fromDictionaryRepresentation: info)
+            hair = try? AVSemanticSegmentationMatte(fromImageSourceAuxiliaryDataType: kCGImageAuxiliaryDataTypeSemanticSegmentationHairMatte, dictionaryRepresentation: info)
         }
         return PortraitMattes(
             portrait: portrait.map { CIImage(cvPixelBuffer: $0.applyingExifOrientation(orientation).mattingImage, options: [.colorSpace: NSNull()]) },

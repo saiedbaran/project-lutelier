@@ -6,7 +6,7 @@ struct StudioView: View {
     @ObservedObject var editor: EditorStore
     @ObservedObject var studio: StudioStore
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.supportsImageGeneration) private var supportsImageGeneration
+    @Environment(\.supportsImagePlayground) private var supportsImageGeneration
     @State private var customPicker: PhotosPickerItem?
     @State private var showingPlayground = false
     @State private var showRename = false
@@ -61,7 +61,7 @@ struct StudioView: View {
                 HStack {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("Search studio references", text: $studio.query)
-                    PhotosPicker(selection: $customPicker, matching: .images) { Image(systemName: "plus").frame(width: 36, height: 36).background(Palette.amber, in: Circle()).foregroundStyle(Palette.ink) }.accessibilityLabel("Add custom studio reference")
+                    PhotosPicker(selection: $customPicker, matching: .images) { Image(systemName: "plus").frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: Circle()) }.accessibilityLabel("Add custom studio reference")
                 }.font(.subheadline).padding(12).lutelierGlass()
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack { ForEach(studio.categories, id: \.self) { category in
@@ -154,7 +154,7 @@ struct StudioView: View {
             }
             Text("AI GENERATED · Slide to compare with your source").font(.caption2).foregroundStyle(.secondary)
             HStack {
-                Button("Try again") { studio.clearResult(); showingPlayground = true }.buttonStyle(.bordered).disabled(saving)
+                Button("Try again") { studio.clearResult(); showingPlayground = true }.buttonStyle(.glass).disabled(saving)
                 Button {
                     guard let data = studio.generatedData, let request = studio.request else { return }
                     saving = true

@@ -15,14 +15,15 @@ struct DepthResult {
 /// Vision mattes identify people; they are never presented as metric depth.
 final class DepthService {
     private let localModel = LocalDepthModel()
-    func analyze(_ image: CIImage, captured: AVDepthData? = nil, mattes: PortraitMattes = PortraitMattes(), existingDepth: CIImage? = nil) throws -> DepthResult {
+    func analyze(_ image: CIImage, captured: AVDepthData? = nil, mattes: PortraitMattes = PortraitMattes(), existingDepth: CIImage? = nil, engine: DepthEngine = .anything, requiresDepth: Bool = false, portraitOnly: Bool = false, progress: ((String) -> Void)? = nil, cancellation: DepthCancellation? = nil) throws -> DepthResult {
+        try cancellation?.check()
         let request = VNGeneratePersonSegmentationRequest()
         request.qualityLevel = .accurate
         request.outputPixelFormat = kCVPixelFormatType_OneComponent8
         // Captured portrait coverage has finer edges than a new whole-photo segmentation.
         if mattes.portrait == nil { try VNImageRequestHandler(ciImage: image, options: [:]).perform([request]) }
         let fallback = request.results?.first.flatMap { observation -> CIImage? in
-            let mask = fit(CIImage(cvPixelBuffer: observation.pixelBuffer), to: image.extent)
+            let mask = fit(CIImage(cvPixelBuffer: observation.pixelBuffer, options: [.colorSpace: NSNull()]), to: image.extent)
             return hasForeground(mask) ? mask : nil
         }
         let portrait = mattes.portrait.map { fit($0, to: image.extent) }
@@ -30,19 +31,25 @@ final class DepthService {
         let mask = PortraitMatteService.subject(portrait: portrait, hair: hair, fallback: fallback, extent: image.extent)
         var depth: CIImage?, explanation: String
         do {
-            depth = try existingDepth ?? captured.map { normalize($0, extent: image.extent) } ?? localModel.estimate(image)
-            explanation = captured != nil || existingDepth != nil ? "Retained/captured depth • white is near" : "Depth Anything V2 Small • on-device relative depth • white is near"
-        } catch {
-            guard mask != nil else { throw error }
-            explanation = "Scene depth unavailable • portrait background blur remains available"
+            if portraitOnly {
+                depth = existingDepth
+                explanation = existingDepth != nil ? "Scene depth retained • portrait updated" : mask != nil ? "Portrait blur ready • analyze for scene depth" : "No person found in this photograph"
+            } else {
+                depth = try existingDepth ?? captured.map { normalize($0, extent: image.extent) } ?? localModel.estimate(image, engine: engine, progress: progress, cancellation: cancellation)
+                explanation = captured != nil || existingDepth != nil ? "Retained/captured depth • white is near" : "\(engine.rawValue) • on-device relative depth • white is near"
+            }
+        } catch is CancellationError { throw CancellationError() } catch {
+            guard !requiresDepth, mask != nil else { throw error }
+            explanation = "\(engine.rawValue) failed: \(error.localizedDescription) • portrait blur remains available"
         }
+        try cancellation?.check()
         let detail = portrait != nil ? hair != nil ? "Apple portrait + hair mattes • on device" : "Apple portrait matte • on device"
             : hair != nil ? "Apple hair matte + Vision person mask • on device" : mask != nil ? "Vision accurate person mask • no captured hair matte" : "No portrait matte available"
         return DepthResult(subject: mask, depth: depth, explanation: explanation, portrait: portrait, hair: hair, matteExplanation: detail)
     }
 
-    func refineDepth(_ image: CIImage, region: CGRect, existing: CIImage, method: DepthRefinementMethod) throws -> DepthRefinementResult {
-        try localModel.refine(image, region: region, existing: existing, method: method)
+    func refineDepth(_ image: CIImage, region: CGRect, existing: CIImage, method: DepthRefinementMethod, engine: DepthEngine = .anything, cancellation: DepthCancellation? = nil) throws -> DepthRefinementResult {
+        try localModel.refine(image, region: region, existing: existing, method: method, engine: engine, cancellation: cancellation)
     }
 
     func refine(_ image: CIImage, region: CGRect, existing: CIImage) throws -> CIImage {
@@ -55,7 +62,7 @@ final class DepthService {
         request.outputPixelFormat = kCVPixelFormatType_OneComponent8
         try VNImageRequestHandler(ciImage: local, options: [:]).perform([request])
         guard let result = request.results?.first else { throw LutelierError.message("No portrait edges found in this area. Include some of the head or body in the selection.") }
-        let mask = fit(CIImage(cvPixelBuffer: result.pixelBuffer), to: local.extent)
+        let mask = fit(CIImage(cvPixelBuffer: result.pixelBuffer, options: [.colorSpace: NSNull()]), to: local.extent)
             .transformed(by: CGAffineTransform(translationX: crop.minX, y: crop.minY))
         let feather = CIImage(color: .white).cropped(to: crop)
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 12]).cropped(to: image.extent)
@@ -70,7 +77,7 @@ final class DepthService {
         let extent = CGRect(x: 0, y: 0, width: 32, height: 32)
         var samples = [Float](repeating: 0, count: 32 * 32)
         let mask = PortraitMatteService.fit(image, to: extent)
-        samples.withUnsafeMutableBytes { CIContext().render(mask, toBitmap: $0.baseAddress!, rowBytes: 32 * 4, bounds: extent, format: .Rf, colorSpace: CGColorSpaceCreateDeviceGray()) }
+        samples.withUnsafeMutableBytes { CIContext(options: [.workingColorSpace: NSNull()]).render(mask, toBitmap: $0.baseAddress!, rowBytes: 32 * 4, bounds: extent, format: .Rf, colorSpace: nil) }
         return samples.filter { $0.isFinite && $0 > 0.1 }.count >= 4
     }
 
@@ -88,7 +95,7 @@ final class DepthService {
         let low = values.isEmpty ? Float(0) : values[values.count / 100]
         let high = values.isEmpty ? Float(1) : values[min(values.count - 1, values.count * 99 / 100)]
         let scale = 1 / max(high - low, 0.0001)
-        let raw = CIImage(cvPixelBuffer: buffer).applyingFilter("CIColorMatrix", parameters: [
+        let raw = CIImage(cvPixelBuffer: buffer, options: [.colorSpace: NSNull()]).applyingFilter("CIColorMatrix", parameters: [
             "inputRVector": CIVector(x: CGFloat(scale), y: 0, z: 0, w: 0),
             "inputGVector": CIVector(x: CGFloat(scale), y: 0, z: 0, w: 0),
             "inputBVector": CIVector(x: CGFloat(scale), y: 0, z: 0, w: 0),

@@ -1,7 +1,7 @@
 import AVFoundation
 import SwiftUI
 
-struct CaptureResult { var processed: Data; var raw: Data?; var depth: AVDepthData?; var portrait: AVPortraitEffectsMatte? = nil; var hair: AVSemanticSegmentationMatte? = nil; var orientedMattes: PortraitMattes? = nil }
+struct CaptureResult { var processed: Data; var raw: Data?; var depth: AVDepthData?; var portrait: AVPortraitEffectsMatte? = nil; var hair: AVSemanticSegmentationMatte? = nil; var orientedMattes: PortraitMattes? = nil; var liveMovie: URL? = nil; var initialRecipe: Recipe? = nil }
 
 final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate, AVCaptureVideoDataOutputSampleBufferDelegate {
     let session = AVCaptureSession()
@@ -16,11 +16,26 @@ final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDele
     private var pendingRaw: Data?
     private var pendingDepth: AVDepthData?
     private var pendingPortrait: AVPortraitEffectsMatte?
+    private var pendingLiveMovie: URL?
     private var pendingHair: AVSemanticSegmentationMatte?
+    @Published var livePhotoAvailable = false
+    @Published var useLivePhoto = false
+    @Published var useHEIF = true
+    @Published var flashAvailable = false
+    @Published var aperture = 1.8
+    @Published var apertureStops: [Double] = []
+    @Published var autoAperture = true
+    @Published var autoExposure = true
+    @Published var autoFocus = true
+    @Published var autoWhiteBalance = true
+    @Published var shutterBounds = (1.0/8000)...1.0
+    @Published var exposureBiasBounds = -2.0...2.0
     @Published var ready = false
     @Published var error: String?
     @Published var rawAvailable = false
     @Published var depthAvailable = false
+    @Published var portraitAvailable = false
+    @Published var hairAvailable = false
     @Published var capturing = false
     @Published var lenses: [AVCaptureDevice] = []
     @Published var selectedLens = ""
@@ -75,20 +90,33 @@ final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDele
     }
 
     private func configureOutput(_ camera: AVCaptureDevice) {
+        output.isLivePhotoCaptureEnabled = output.isLivePhotoCaptureSupported
+        output.maxPhotoQualityPrioritization = .quality
         output.isAppleProRAWEnabled = output.isAppleProRAWSupported
         output.isDepthDataDeliveryEnabled = output.isDepthDataDeliverySupported
         output.isPortraitEffectsMatteDeliveryEnabled = output.isDepthDataDeliveryEnabled && output.isPortraitEffectsMatteDeliverySupported
-        output.enabledSemanticSegmentationMatteTypes = output.isDepthDataDeliveryEnabled ? output.availableSemanticSegmentationMatteTypes.filter { $0 == .hair } : []
+        output.enabledSemanticSegmentationMatteTypes = output.availableSemanticSegmentationMatteTypes.filter { $0 == .hair }
         let raw = !output.availableRawPhotoPixelFormatTypes.isEmpty
         DispatchQueue.main.async {
             self.rawAvailable = raw
+            self.livePhotoAvailable = self.output.isLivePhotoCaptureSupported
+            self.flashAvailable = camera.hasFlash
+            self.aperture = Double(camera.lensAperture)
+            self.apertureStops = camera.activeFormat.maxLensAperture > camera.activeFormat.minLensAperture
+                ? [1.4, 1.8, 2.8, 4.0].filter { $0 >= Double(camera.activeFormat.minLensAperture) && $0 <= Double(camera.activeFormat.maxLensAperture) } : []
+            self.shutter = CMTimeGetSeconds(camera.exposureDuration)
+            self.shutterBounds = max(0.00001, CMTimeGetSeconds(camera.activeFormat.minExposureDuration))...max(0.00002, CMTimeGetSeconds(camera.activeFormat.maxExposureDuration))
+            self.exposureBiasBounds = Double(camera.minExposureTargetBias)...Double(camera.maxExposureTargetBias)
+            if !self.livePhotoAvailable { self.useLivePhoto = false }
             self.depthAvailable = self.output.isDepthDataDeliverySupported
+            self.portraitAvailable = self.output.isPortraitEffectsMatteDeliveryEnabled
+            self.hairAvailable = self.output.enabledSemanticSegmentationMatteTypes.contains(.hair)
             self.isoBounds = Double(camera.activeFormat.minISO)...Double(camera.activeFormat.maxISO)
             self.iso = Double(camera.iso)
             self.selectedLens = camera.uniqueID
-            self.focusAvailable = camera.isFocusModeSupported(.locked)
+            self.focusAvailable = camera.isFocusModeSupported(.locked) && camera.isLockingFocusWithCustomLensPositionSupported
             self.exposureAvailable = camera.isExposureModeSupported(.custom)
-            self.whiteBalanceAvailable = camera.isWhiteBalanceModeSupported(.locked)
+            self.whiteBalanceAvailable = camera.isWhiteBalanceModeSupported(.locked) && camera.isLockingWhiteBalanceWithCustomDeviceGainsSupported
             self.zoomLimit = min(Double(camera.activeFormat.videoMaxZoomFactor), 10)
             self.zoom = 1
             if !raw { self.useRAW = false }
@@ -110,37 +138,48 @@ final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDele
     }
 
     func applyControls() {
-        let values = (manual, iso, shutter, focus, kelvin, bias, tint, zoom)
+        let values = (iso, shutter, focus, kelvin, bias, tint, zoom, aperture)
+        let modes = (manual && !autoExposure, manual && !autoFocus, manual && !autoWhiteBalance, !autoAperture)
         queue.async {
             guard let d = self.device else { return }
             do {
                 try d.lockForConfiguration(); defer { d.unlockForConfiguration() }
-                d.videoZoomFactor = min(max(CGFloat(values.7), 1), d.activeFormat.videoMaxZoomFactor)
-                if values.0 {
-                    if d.isExposureModeSupported(.custom) {
-                        let duration = min(max(values.2, CMTimeGetSeconds(d.activeFormat.minExposureDuration)), CMTimeGetSeconds(d.activeFormat.maxExposureDuration))
-                        d.setExposureModeCustom(duration: CMTime(seconds: duration, preferredTimescale: 1_000_000_000), iso: min(max(Float(values.1), d.activeFormat.minISO), d.activeFormat.maxISO), completionHandler: nil)
+                d.videoZoomFactor = min(max(CGFloat(values.6), 1), d.activeFormat.videoMaxZoomFactor)
+                let duration = CMTime(seconds: min(max(values.1, CMTimeGetSeconds(d.activeFormat.minExposureDuration)), CMTimeGetSeconds(d.activeFormat.maxExposureDuration)), preferredTimescale: 1_000_000_000)
+                let iso = min(max(Float(values.0), d.activeFormat.minISO), d.activeFormat.maxISO)
+                if modes.0 || modes.3 {
+                    let aperture = modes.3 ? min(max(Float(values.7), d.activeFormat.minLensAperture), d.activeFormat.maxLensAperture) : AVCaptureDevice.currentLensAperture
+                    let requestedDuration = modes.0 ? duration : AVCaptureDevice.autoExposureDuration
+                    let requestedISO = modes.0 ? iso : AVCaptureDevice.autoISO
+                    if d.activeFormat.supportsExposureModeCustom(lensAperture: aperture, duration: requestedDuration, iso: requestedISO) {
+                        d.setExposureModeCustom(lensAperture: aperture, duration: requestedDuration, iso: requestedISO, completionHandler: nil)
+                    } else if modes.0 && d.isExposureModeSupported(.custom) {
+                        d.setExposureModeCustom(duration: duration, iso: iso, completionHandler: nil)
                     }
-                    if d.isFocusModeSupported(.locked) { d.setFocusModeLocked(lensPosition: Float(values.3), completionHandler: nil) }
-                    if d.isWhiteBalanceModeSupported(.locked) {
-                        var gains = d.deviceWhiteBalanceGains(for: .init(temperature: Float(values.4), tint: Float(values.6)))
-                        gains.redGain = min(max(gains.redGain, 1), d.maxWhiteBalanceGain)
-                        gains.greenGain = min(max(gains.greenGain, 1), d.maxWhiteBalanceGain)
-                        gains.blueGain = min(max(gains.blueGain, 1), d.maxWhiteBalanceGain)
-                        d.setWhiteBalanceModeLocked(with: gains, completionHandler: nil)
-                    }
-                } else {
-                    if d.isFocusModeSupported(.continuousAutoFocus) { d.focusMode = .continuousAutoFocus }
-                    if d.isExposureModeSupported(.continuousAutoExposure) { d.exposureMode = .continuousAutoExposure }
-                    if d.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { d.whiteBalanceMode = .continuousAutoWhiteBalance }
-                    d.setExposureTargetBias(min(max(Float(values.5), d.minExposureTargetBias), d.maxExposureTargetBias), completionHandler: nil)
-                }
+                } else if d.isExposureModeSupported(.continuousAutoExposure) { d.exposureMode = .continuousAutoExposure }
+                if !modes.0 { d.setExposureTargetBias(min(max(Float(values.4), d.minExposureTargetBias), d.maxExposureTargetBias), completionHandler: nil) }
+                if modes.1 && d.isLockingFocusWithCustomLensPositionSupported && d.isFocusModeSupported(.locked) {
+                    d.setFocusModeLocked(lensPosition: min(max(Float(values.2), 0), 1), completionHandler: nil)
+                } else if d.isFocusModeSupported(.continuousAutoFocus) { d.focusMode = .continuousAutoFocus }
+                if modes.2 && d.isLockingWhiteBalanceWithCustomDeviceGainsSupported && d.isWhiteBalanceModeSupported(.locked) {
+                    var gains = d.deviceWhiteBalanceGains(for: AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(temperature: Float(values.3), tint: Float(values.5)))
+                    gains.redGain = min(max(gains.redGain, 1), d.maxWhiteBalanceGain)
+                    gains.greenGain = min(max(gains.greenGain, 1), d.maxWhiteBalanceGain)
+                    gains.blueGain = min(max(gains.blueGain, 1), d.maxWhiteBalanceGain)
+                    d.setWhiteBalanceModeLocked(with: gains, completionHandler: nil)
+                } else if d.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { d.whiteBalanceMode = .continuousAutoWhiteBalance }
             } catch { self.publishError(error.localizedDescription) }
         }
     }
 
+    func switchCamera() {
+        guard let current = lenses.first(where: { $0.uniqueID == selectedLens }),
+              let next = lenses.first(where: { $0.position != current.position }) else { return }
+        selectLens(next.uniqueID)
+    }
+
     func focusAt(_ point: CGPoint) {
-        guard !manual else { return }
+        guard !manual || autoFocus else { return }
         queue.async {
             guard let d = self.device else { return }
             do {
@@ -174,21 +213,26 @@ final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDele
     func capture() {
         guard ready, !capturing else { return }
         capturing = true
-        let options = (useRAW, useDepth, flash)
+        let options = (useRAW, useDepth, flash, useLivePhoto, useHEIF)
         queue.async {
-            self.pendingRaw = nil; self.pendingProcessed = nil; self.pendingDepth = nil
+            self.pendingRaw = nil; self.pendingProcessed = nil; self.pendingDepth = nil; self.pendingLiveMovie = nil
+            let codec: AVVideoCodecType = options.4 && self.output.availablePhotoCodecTypes.contains(.hevc) ? .hevc : .jpeg
             self.pendingPortrait = nil; self.pendingHair = nil
             let settings: AVCapturePhotoSettings
             if options.0, let format = self.output.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }) ?? self.output.availableRawPhotoPixelFormatTypes.first {
-                settings = AVCapturePhotoSettings(rawPixelFormatType: format, processedFormat: [AVVideoCodecKey: AVVideoCodecType.jpeg])
-            } else { settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg]) }
+                settings = AVCapturePhotoSettings(rawPixelFormatType: format, processedFormat: [AVVideoCodecKey: codec])
+            } else { settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: codec]) }
+            if options.3 && !options.0 && self.output.isLivePhotoCaptureEnabled {
+                settings.livePhotoMovieFileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mov")
+            }
+            settings.photoQualityPrioritization = .quality
             // RAW/depth simultaneous delivery varies by device; request depth for processed mode.
             settings.isDepthDataDeliveryEnabled = !options.0 && options.1 && self.output.isDepthDataDeliveryEnabled
             settings.embedsDepthDataInPhoto = settings.isDepthDataDeliveryEnabled
             settings.isPortraitEffectsMatteDeliveryEnabled = settings.isDepthDataDeliveryEnabled && self.output.isPortraitEffectsMatteDeliveryEnabled
             settings.embedsPortraitEffectsMatteInPhoto = settings.isPortraitEffectsMatteDeliveryEnabled
             // RAW combinations vary by camera; request semantic mattes only for processed depth capture.
-            settings.enabledSemanticSegmentationMatteTypes = settings.isDepthDataDeliveryEnabled ? self.output.enabledSemanticSegmentationMatteTypes : []
+            settings.enabledSemanticSegmentationMatteTypes = !options.0 ? self.output.enabledSemanticSegmentationMatteTypes : []
             settings.embedsSemanticSegmentationMattesInPhoto = !settings.enabledSemanticSegmentationMatteTypes.isEmpty
             if self.output.supportedFlashModes.contains(.on) { settings.flashMode = options.2 ? .on : .off }
             if let connection = self.output.connection(with: .video), connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
@@ -205,8 +249,12 @@ final class CameraService: NSObject, ObservableObject, AVCapturePhotoCaptureDele
             pendingHair = photo.semanticSegmentationMatte(for: .hair)
         }
     }
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingLivePhotoToMovieFileAt outputFileURL: URL, duration: CMTime, photoDisplayTime: CMTime, resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
+        if error == nil { pendingLiveMovie = outputFileURL }
+        else { try? FileManager.default.removeItem(at: outputFileURL); publishError(error!.localizedDescription) }
+    }
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
-        let result = pendingProcessed.map { CaptureResult(processed: $0, raw: pendingRaw, depth: pendingDepth, portrait: pendingPortrait, hair: pendingHair) }
+        let result = pendingProcessed.map { CaptureResult(processed: $0, raw: pendingRaw, depth: pendingDepth, portrait: pendingPortrait, hair: pendingHair, liveMovie: pendingLiveMovie) }
         DispatchQueue.main.async {
             self.capturing = false
             if let error { self.error = error.localizedDescription }

@@ -1,67 +1,188 @@
 # On-device depth and portrait edges
 
-All depth processing runs inside Lutelier on the iPhone. There is no computer companion, network depth endpoint or external model server.
+All inference runs inside Lutelier on the iPhone. There is no companion computer,
+network depth endpoint, or external model server. White means near; the normalized
+maps used by the editor are not measurements in metres.
 
-## Implemented pipeline
+## Model choices
 
-1. Retain the saved refined depth map when reopening a photograph. Otherwise use captured/embedded disparity when available, or estimate relative scene depth with the bundled Apple Core ML conversion of **Depth Anything V2 Small F16** (~50 MB). White means near; these normalized values are not metres. Core ML chooses available compute units.
-2. Read Apple's portrait-effects and hair semantic mattes from supported processed captures or imported JPEG/HEIF auxiliary data. Enable delivery only when the camera reports support, before starting its session. Depth-enabled processed capture requests embedding; RAW capture does not request these mattes. A request does not guarantee a matte: the camera must detect a suitable subject.
-3. Use Vision accurate person segmentation when no captured portrait matte exists. Combine available hair coverage with the preferred portrait coverage. A coarse Vision mask never replaces an available fine capture portrait matte. These are alpha/coverage images, kept separately from scene depth.
-4. **Preserve portrait edges** attenuates near/far blur masks using that coverage. Disable it when the intended focus plane should blur the person too. This protects fractional edges but does not recover true hair geometry or fully remove foreground colour bleeding into the background blur.
-5. Persist depth, captured portrait and hair textures locally alongside the original and recipe. Center-cropped capture preserves and crops oriented mattes with the photograph; scalar depth is re-estimated for that framing.
+| Engine | Integration | Measured inference on iPhone 16 Pro |
+| --- | --- | --- |
+| Depth Anything V2 Small F16 | Apple's Core ML conversion, about 50 MB | 7.64 s |
+| Depth Anything 3 Small | Daisuke Majima's Core ML conversion, about 69 MB | 9.74 s |
+| Depth Pro | Separate full-image encoder and tiled decoder, about 754 MB | 165.59 s |
 
-In **Depth**, Analyze generates scene depth and portrait coverage. Inspect **Photo / Depth / Portrait / Hair**; unavailable texture choices are omitted. Hair is available only when Apple supplied a hair matte, not synthesized by Vision. Enable Box select, draw a region and choose Refine selected depth. Disable selection to resume pinch/pan.
+These are single-photo measurements including model loading and normalization,
+not a general quality or speed benchmark. Depth Pro should be presented as an
+approximately three-minute research option. All three passed actual inference,
+finite/non-flat depth, foreground/background alignment, and blur-render checks
+on the connected iPhone 16 Pro running iOS 27.2. The final suite passed 21 tests.
 
-## Regional refinement
+Depth Anything 3 outputs both `depth` and `confidence`. Select `depth` by name,
+convert positive distance to inverse depth, then normalize. The scalar and tensor
+paths preserve image orientation. Red-channel scalar maps are displayed as gray,
+including older saved maps. `.Rf` readback disables color conversion; passing an
+unsupported DeviceGray output space previously produced zeros and a false flat-map
+error. Core ML schedules V2/V3 with `.all`; Neural Engine-only execution is not promised.
 
-Choose between two modes after estimating depth and drawing a box:
+## Depth Pro implementation
 
-- **Context crop**: one new inference over the selection with 20% surrounding context. Robust scale/offset fitting aligns it to the existing relative depth; the join is feathered.
-- **Overlapping tiles (experimental)**: one contextual inference followed by four overlapping crops, each 68% of the contextual region's width/height (about 36% overlap). Fit the contextual prediction to the saved map, then fit each detail crop to that fixed contextual anchor. Accumulate weighted predictions rather than overwriting tiles in sequence. The anchor retains a baseline weight; support-edge feathering, alignment residual/correlation and per-pixel disagreement reduce unstable contributions. Tile-order independence and exact array preservation outside the selection have dedicated XCTest cases.
+The original community normalized-inverse-depth conversion retains Apple's learned
+weights with 10% pruning and linear quantization. Its full decoder created a
+600 MB FP16 activation (about 1.2 GB as FP32), which failed on this phone.
 
-Both methods allocate the working grid to the contextual **region**, capped at 2048 pixels on its longest side without upscaling beyond source resolution. This avoids spending most of the grid on the unselected photograph. The resulting regional image blends into the original full-resolution map only inside the selected box. Depth beyond that box and portrait/hair coverage remain unchanged.
+The adapted encoder preserves the full-image context and returns feature grids
+at 96, 96, and 192 pixels, each with 256 channels. The original convolution decoder
+runs sequentially on sixteen 32/32/64-pixel feature crops. A four-latent-pixel halo
+is discarded; 24-pixel interiors are stitched into a 1536px map. Normalization
+happens after stitching. Learned weights and global encoder inputs are retained.
+The encoder is released before the roughly 9 MB decoder is loaded. Core ML uses
+CPU/GPU execution with low-precision GPU accumulation. App-level thermal gates
+are removed; Detail tiles remains available. System thermal management still applies.
 
-Inference uses the bundled Core ML model with all compute units enabled (Core ML chooses scheduling; Neural Engine-only execution is not promised). The same model instance runs sequentially, with one detail tile in flight. Fusion/array alignment executes in Swift on the iPhone CPU and image rendering uses Core Image. No computer, server, network transfer, Python runtime, CUDA or additional model weights are required.
+Two offset decoder tiles produced identical shared interior values on Mac
+(maximum and mean absolute error 0). Device runs completed in 171.01, 164.17, and
+165.59 seconds. The final map was visually inspected for orientation and seams.
+The studio portrait's mean normalized depth was 0.875 versus 0.254 for its backdrop.
+This is operational validation on a reference image, not a claim of universal accuracy.
 
-Alignment rejects flat patches, reversed disparity and insufficient context. It uses two-pass 80% residual trimming, positive scale bounds 0.05–20, correlation at least 0.35 and trimmed normalized RMSE at most 0.12. These thresholds and consistency weights are **uncalibrated heuristics**, not learned confidence. A failing tile is omitted and counted; no accepted detail tiles means no saved change. Serious/critical thermal state prevents starting Overlapping tiles; critical heating during the run aborts before the map is replaced. Context crop remains the faster default. This is a still-photo operation, not live video depth.
+An earlier trial hit a compiler disk-space error. Abandoned app-owned compilation
+caches and old temporary model copies were removed once during development; no
+photos or edits were removed. This cleanup is not part of the production runtime.
+The original monolithic conversion remains outside the app in the development workspace.
 
-This original coarse/fine fusion borrows the multi-scale/overlap idea from the literature. It is **not the learned PatchFusion or PatchRefiner V2 architecture**, and no published accuracy/latency claim transfers to it. Crops can lose context or invent depth boundaries; consistency with a wrong coarse map cannot prove geometric accuracy. Hair alpha does not provide hair depth. Inspect seams, glasses, transparency, texture edges and occlusions before using the result. Device benchmarks and paired portrait-quality comparisons remain required.
+Depth Pro is included for the user's personal research experiment. The original
+model-weight terms are bundled in `LICENSE-DepthPro.txt`; a conversion repository's
+code-license label does not replace those terms.
 
-## Other models
+## Portrait and hair coverage
 
-**PatchRefiner V2 (ICLR 2026)** is a newer lightweight refinement candidate; its official inference uses a Python/distributed GPU launcher, and no verified Core ML/iPhone integration is included here. **Prompt Depth Anything** is a promising LiDAR-guided candidate, but no verified Core ML conversion or iPhone benchmark is bundled. It requires calibrated metric LiDAR, which normalized disparity cannot replace. Community Core ML Depth Pro conversions exist, including a pruned/quantized normalized-disparity variant (~745 MB), but no runtime is enabled in this product. The original Apple weight license (AMLR) explicitly excludes product development and commercial products; conversion repository ASCL labels do not override it. Experimental status is not a license exception. MODNet and Robust Video Matting are not bundled; conversions, licensing and device evaluation remain separate work. These methods are not presented as working options.
+Apple portrait effects and semantic hair mattes are separate coverage images,
+not scene-depth engines. Read them from compatible captures or JPEG/HEIF auxiliary
+data. Imports request `.current` encoding to avoid unnecessary transcoding.
 
-## Verification and provenance
+- Capture requests portrait delivery when supported and depth capture is enabled.
+- Hair delivery follows `availableSemanticSegmentationMatteTypes`, independently
+  of depth availability. RAW capture disables these incompatible mattes.
+- The default camera on the tested iPhone reported depth, portrait, and hair support.
+  A capture request still requires a suitable detected subject to produce a matte.
+- `Find portrait mask` runs Apple's accurate Vision person segmentation independently
+  of the selected depth model, retaining existing depth. This passed in 0.31 seconds.
+- Captured portrait coverage takes priority over Vision. Available hair coverage is
+  combined with it. A person mask is never relabeled as an Apple hair matte.
+- Missing hair is explained in the UI. It cannot be recovered from a plain photo
+  through the capture-only Apple hair-matte API.
 
-Apple's unmodified model package and the Small model's Apache 2.0 license are bundled. Source/resource checks run on Windows. Xcode compilation, XCTest, orientation/polarity, capture matte availability, latency, memory, thermals and portrait quality must be checked on an iPhone 16 Pro or newer. No on-device inference or quality benchmark has been run here. The HTML preview uses explicitly labelled illustrative textures and performs no AI inference.
+`Preserve portrait edges` attenuates blur with coverage. Disable it when the intended
+focus plane should blur the person. Fractional coverage does not recover true hair
+depth or fully remove foreground color bleeding. Depth, portrait, hair, and recipes
+are saved locally. Center-cropped captures crop oriented mattes with the photograph.
+
+## Editor and refinement
+
+Depth sections use a full-row disclosure button. Bokeh shapes use 44-point direct
+selection buttons, available before analysis. The UI explains when analysis or
+nonzero Near/Far blur is needed to see an effect. Inspect Photo, Depth, Portrait,
+and Hair when available. Under Refine an area, enable selection and draw a box.
+Closing refinement or leaving Depth restores normal photo interaction.
+
+- **Context**: one inference over the selection with 20% surrounding context.
+- **Detail tiles (experimental)**: one context pass and four overlapping crops,
+  each 68% of the context region's width/height. Robust positive scale/offset fitting
+  aligns each crop with the context anchor; feathered weighted accumulation reduces
+  disagreement and preserves the original map outside the selection.
+
+The regional working grid is capped at 2048px without upscaling beyond source
+resolution. Alignment uses 80% residual trimming, scale bounds 0.05–20, correlation
+at least 0.35, and normalized RMSE at most 0.12. These are uncalibrated heuristics,
+not learned confidence or the published PatchFusion/PatchRefiner architecture.
+No accepted detail tiles means no saved change. Thermal checks prevent starting
+expensive refinement when hot. Selecting Depth Pro multiplies its inference time
+by the number of passes. Context is the faster default.
+
+Optical controls support Soft, Disc, Ring, Anamorphic, and Polygon apertures;
+near/far blur, focus plane, oval ratio, blade count, rotation, cat-eye clipping,
+shaped highlights, highlight glow, and highlight sensitivity. The renderer uses
+192 normalized aperture samples. Relative disparity now controls the blur radius
+rather than crossfading a sharp image with a fixed-radius blurred copy.
+
+Background samples exclude the protected subject and nearer depth regions before
+colour integration. A small donor-only matte inset excludes mixed silhouette pixels
+without expanding the visible sharp subject. Foreground blur integrates source
+footprints and their coverage beyond the original silhouette; exposed edge pixels
+use local background estimates. Portrait coverage is applied independently from
+circle-of-confusion radius. All processing remains local.
+
+This addresses the old whole-image blur's foreground colour leakage. It is an
+approximation: hidden background cannot be recovered exactly from a single image,
+coarse depth/mattes can still produce artifacts, and relative depth is not calibrated
+focal distance. Inspect hair, glass, strong lights, and occlusion edges. The Bloom
+control currently adds aperture-weighted highlight glow, not an additional full-frame
+Gaussian blur that could reintroduce foreground leakage.
+
+Research reviewed for this change:
+- [Dr.Bokeh, CVPR 2024](https://shengcn.github.io/DrBokeh/): occlusion-aware layered
+  rendering. This app adopts the visibility/coverage principle, not its full pipeline.
+- [Bokehlicious, ICCV 2025](https://github.com/timseizinger/bokehlicious): a separate
+  learned controllable-bokeh approach with public research checkpoints.
+- [NTIRE 2026 controllable bokeh challenge](https://arxiv.org/abs/2605.05510): recent
+  learned alternatives. No additional model weights were bundled for this change;
+  the demonstrated whole-image colour leakage is a rendering bug independent of
+  the existing depth estimator.
+
+Photo clipping follows the visible image bounds, with a 28-point continuous corner
+curve in normal, expanded, and comparison views, including when zoomed. This uses
+public iOS continuous-corner rendering; iOS does not expose one universal system
+corner radius for all surfaces. Editing, import/export, comparison, and camera icon
+groups use shared Liquid Glass islands with separate pressed/selected overlays.
+
+## Reproducing model resources
+
+Use Python 3.10+ with coremltools 9 and Xcode:
+
+```sh
+python LutelierIOS/tools/prepare_depth_models.py --work-dir /path/to/model-work --depth-pro
+```
+
+Omit `--depth-pro` to prepare only Depth Anything 3. Downloads are pinned to source
+revisions and weight SHA-256 hashes. Compiled model directories are excluded from
+Git; licenses and attribution notices are bundled. V2's original package remains
+bundled. The app shows only models whose required resources are present.
 
 - [Apple Core ML model catalogue](https://developer.apple.com/machine-learning/models/)
-- [Depth Anything V2 and Small license](https://github.com/DepthAnything/Depth-Anything-V2)
-- [Apple semantic matte capture](https://developer.apple.com/videos/play/wwdc2019/260/)
-- [Portrait matte delivery](https://developer.apple.com/documentation/avfoundation/avcapturephotosettings/isportraiteffectsmattedeliveryenabled)
-- [Vision person segmentation](https://developer.apple.com/documentation/vision/vngeneratepersonsegmentationrequest)
-- [PromptDA](https://github.com/DepthAnything/PromptDA)
+- [Depth Anything 3 upstream](https://github.com/ByteDance-Seed/Depth-Anything-3)
+- [Depth Anything 3 Core ML conversion](https://huggingface.co/mlboydaisuke/Depth-Anything-3-Small-CoreML)
 - [Apple Depth Pro](https://github.com/apple/ml-depth-pro)
+- [Depth Pro source conversion](https://huggingface.co/KeighBee/coreml-DepthPro)
+- [Original Depth Pro weight license](https://huggingface.co/apple/DepthPro/blob/main/LICENSE)
+- [Apple semantic matte capture](https://developer.apple.com/videos/play/wwdc2019/260/)
+- [Apple portrait matte configuration](https://developer.apple.com/documentation/avfoundation/configuring-camera-capture-to-collect-a-portrait-effects-matte)
 
-- [PatchFusion coarse/fine learned fusion](https://arxiv.org/abs/2312.02284)
-- [PatchRefiner V2 official release and inference](https://github.com/zhyever/PatchRefinerV2)
 
-## Depth Pro assessment (2 October 2026)
+## Editor and camera interaction update
 
-The earlier absence-of-conversion assessment was incomplete. A public community conversion exists, but its normalized output is relative inverse depth, not metric metres, and physical-device latency/memory/quality remain unverified here. Apple's code license and model-weight license are distinct. The latter permits only non-commercial scientific research and excludes product development. No Depth Pro weights were downloaded, bundled, installed or enabled. A separate qualifying research project or separately granted model rights would be needed before proceeding. The depth information sheet explains this; a nonworking selectable engine is not added.
+The Depth inspector uses Setup, Blur, Lens, and Refine pages. Analysis and detail
+refinement share a cancellation token checked between inference passes/tiles and
+before committing results. Cancellation preserves the previous depth and mattes;
+an already running Core ML pass must finish first. Aperture blades are an integer
+(3–9), with legacy fractional recipes rounded on decode. Sliders snap to zero or
+their defaults and provide selection feedback.
 
-- [Community conversion author/model card](https://huggingface.co/KeighBee/coreml-DepthPro)
-- [Apple original model-weight license](https://huggingface.co/apple/DepthPro/blob/main/LICENSE)
+Native UITabBar supplies the system glass selection lens. Action islands use
+interactive SwiftUI Liquid Glass. Photo-coloured blurred illumination follows
+the visible photo bounds and device tilt, with Reduce Motion respected.
 
-Editor model status, portrait texture explanations and refinement instructions are available through info buttons. They do not occupy permanent control rows.
+Camera controls are arranged in a compact grid and focused setting drawers:
+flash, Live Photo, aspect, timer, exposure, styles, depth, low-light shutter
+presets, format, aperture, focus, shutter/ISO, white balance, histogram and grid.
+Live Photo captures retain their motion pair and can export the original pair.
+Variable aperture uses iOS 27 AVFoundation capability checks and is unavailable
+on the tested iPhone 16 Pro's fixed-aperture cameras. Low light uses public manual
+exposure controls, not Apple's private Night-mode processing. Styles are Lutelier
+recipes applied after capture.
 
-## Depth tab capability audit
-
-- Depth Anything V2 Small: bundled Core ML model; inference stays on the iPhone.
-- Apple Portrait/Hair: captured coverage when supplied, with Vision person fallback. Hair is not fabricated when missing.
-- Depth Pro: visible availability row and info link; unavailable pending suitable rights and physical-device validation. No weights or external inference service.
-- Context crop / Overlapping tiles: box-based re-estimation, scale alignment, consistency checks and feathered blending. Saved depth outside the box remains unchanged; the updated map drives the next blur render.
-- Inspection: Photo, Depth, and available Portrait/Hair textures. Zoom and box selection work in photo coordinates.
-- Optical controls: separate near/far blur and focus plane; Soft, Disc, Ring, Anamorphic and Polygon; oval ratio, blade count, aperture rotation, peripheral cat-eye clipping, shaped bokeh highlights, background bloom and luminosity sensitivity.
-
-Highlights are extracted from the original blur plane before aperture integration, rather than contrast-boosting an already blurred photograph. A normalized 96-sample idealized aperture supports rotated oval/polygon shapes and peripheral pupil clipping. The protected plane masks highlight input and final compositing; bounded screen addition avoids unbounded highlight gain. Bloom softens only the highlight contribution. This is an artistic camera simulation, not a measured lens point-spread function, occlusion-correct optical reconstruction or a guarantee of hair-level depth. Sampling artifacts and foreground colour bleed remain device-QA concerns. Zero highlight/bloom settings preserve the ordinary blur path. All depth/refinement/blur operations use Core ML, Vision and Core Image on the iPhone; the HTML illustrates controls only.
+References:
+- https://developer.apple.com/documentation/SwiftUI/Applying-Liquid-Glass-to-custom-views
+- https://developer.apple.com/videos/play/wwdc2025/323/
+- https://support.apple.com/en-ca/guide/iphone/ipht182e41vsz41/27/ios/27
+- https://www.apple.com/newsroom/2026/09/final-cut-camera-now-supports-variable-aperture-on-iphone-18-pro/

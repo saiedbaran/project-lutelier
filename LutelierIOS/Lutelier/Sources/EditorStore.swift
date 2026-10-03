@@ -22,8 +22,17 @@ final class EditorStore: ObservableObject {
     @Published var portraitPreview: UIImage?
     @Published var hairPreview: UIImage?
     @Published var matteStatus = "Analyze to find portrait edges"
+    @Published var depthEngine: DepthEngine = .anything
     @Published var depthRefinementMethod: DepthRefinementMethod = .contextual
     private var capturedMattes = PortraitMattes()
+    @Published var analysisRunning = false
+    @Published var cancellingAnalysis = false
+    private var depthCancellation: DepthCancellation?
+    func cancelAnalysis() {
+        guard analysisRunning else { return }
+        depthCancellation?.cancel(); cancellingAnalysis = true
+        depthStatus = "Cancelling after the current model pass…"
+    }
     @Published var busy = false
     @Published var error: String?
     @Published var message: String?
@@ -62,8 +71,11 @@ final class EditorStore: ObservableObject {
         } catch { self.error = error.localizedDescription; busy = false }
     }
     func receiveCapture(_ result: CaptureResult) async {
-        do { try await add(data: result.processed, raw: result.raw, captured: result.depth, mattes: result.orientedMattes ?? PortraitMatteService.read(result.processed, portrait: result.portrait, hair: result.hair)) }
-        catch { error = error.localizedDescription; busy = false }
+        do {
+            try await add(data: result.processed, raw: result.raw, captured: result.depth, mattes: result.orientedMattes ?? PortraitMatteService.read(result.processed, portrait: result.portrait, hair: result.hair), liveMovie: result.liveMovie)
+            if let recipe = result.initialRecipe { edit { $0 = recipe } }
+        }
+        catch { self.error = error.localizedDescription; busy = false }
     }
     func receiveStudioResult(_ data: Data, request: StudioGenerationRequest) async -> Bool {
         busy = true
@@ -78,10 +90,14 @@ final class EditorStore: ObservableObject {
             return selectedPhotoID == id
         } catch { self.error = error.localizedDescription; busy = false; return false }
     }
-    private func add(data: Data, raw: Data? = nil, captured: AVDepthData? = nil, mattes: PortraitMattes? = nil) async throws {
+    private func add(data: Data, raw: Data? = nil, captured: AVDepthData? = nil, mattes: PortraitMattes? = nil, liveMovie: URL? = nil) async throws {
         let id = UUID()
         let filename = id.uuidString + ".photo"
         try data.write(to: documents.appendingPathComponent(filename), options: .atomic)
+        if let liveMovie {
+            defer { try? FileManager.default.removeItem(at: liveMovie) }
+            try FileManager.default.copyItem(at: liveMovie, to: documents.appendingPathComponent(id.uuidString + ".mov"))
+        }
         if let raw { try raw.write(to: documents.appendingPathComponent(id.uuidString + ".dng"), options: .atomic) }
         let record = PhotoRecord(id: id, filename: filename, date: Date(), recipe: Recipe())
         photos.insert(record, at: 0)
@@ -90,6 +106,7 @@ final class EditorStore: ObservableObject {
     }
 
     func open(_ record: PhotoRecord, captured: AVDepthData? = nil, mattes: PortraitMattes? = nil) async {
+        depthCancellation?.cancel(); depthCancellation = nil; analysisRunning = false; cancellingAnalysis = false
         busy = true
         generation += 1
         renderTask?.cancel()
@@ -126,7 +143,7 @@ final class EditorStore: ObservableObject {
                 if depth == nil { depth = DepthResult(subject: nil, depth: savedDepth, explanation: "Saved captured depth") }
                 else { depth?.depth = savedDepth }
                 hasDepth = true; depthStatus = "Saved depth • near and far planes available"
-                let texture = try await render(savedDepth, recipe: Recipe(), look: .original, depth: nil, max: 1800)
+                let texture = try await renderDepthTexture(savedDepth)
                 guard selectedPhotoID == record.id else { return }
                 depthPreview = texture
             }
@@ -211,63 +228,89 @@ final class EditorStore: ObservableObject {
         if let image = try? await render(original, recipe: settings, look: look, depth: nil, max: 160), selectedPhotoID == photo { thumbnails[look.id] = image }
     }
 
-    func analyze(captured: AVDepthData? = nil, persistMask: Bool = true) async {
+    func analyze(captured: AVDepthData? = nil, persistMask: Bool = true, regenerate: Bool = false, portraitOnly: Bool = false) async {
         guard let original else { return }
-        busy = true
-        defer { busy = false }
-        let photo = selectedPhotoID, service = depthService
+        guard !analysisRunning else { return }
+        let cancellation = DepthCancellation(); depthCancellation = cancellation
+        busy = true; analysisRunning = true; cancellingAnalysis = false
+        depthStatus = portraitOnly ? "Finding portrait edges…" : "Analyzing with \(depthEngine.rawValue)…"
+        defer { if depthCancellation === cancellation { if cancellation.isCancelled { depthStatus = "Cancelled • previous depth retained" }; busy = false; analysisRunning = false; cancellingAnalysis = false; depthCancellation = nil } }
+        let photo = selectedPhotoID, service = depthService, selectedEngine = depthEngine
         do {
-            let retainedDepth = depth?.depth
+            let retainedDepth = regenerate ? nil : depth?.depth
             let mattes = capturedMattes
             var result: DepthResult = try await withCheckedThrowingContinuation { continuation in
-                worker.async { continuation.resume(with: Result { try service.analyze(original, captured: captured, mattes: mattes, existingDepth: retainedDepth) }) }
+                worker.async { continuation.resume(with: Result { try service.analyze(original, captured: captured, mattes: mattes, existingDepth: retainedDepth, engine: selectedEngine, requiresDepth: regenerate, portraitOnly: portraitOnly, progress: { status in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.selectedPhotoID == photo, self.analysisRunning, self.depthCancellation === cancellation, !cancellation.isCancelled else { return }
+                        self.depthStatus = status
+                    }
+                }, cancellation: cancellation) }) }
             }
-            guard selectedPhotoID == photo else { return }
+            guard selectedPhotoID == photo, !cancellation.isCancelled else { return }
             if result.depth == nil, let retainedDepth { result.depth = retainedDepth; result.explanation = "Captured depth • portrait mask updated" }
+            var nextPortrait: UIImage?, nextHair: UIImage?, nextDepth: UIImage?
+            if let mask = result.subject { nextPortrait = try await render(mask, recipe: Recipe(), look: .original, depth: nil, max: 1800) }
+            try cancellation.check()
+            if let hair = result.hair { nextHair = try await render(hair, recipe: Recipe(), look: .original, depth: nil, max: 1800) }
+            try cancellation.check()
+            if let map = result.depth { nextDepth = try await renderDepthTexture(map) }
+            try cancellation.check()
+            guard selectedPhotoID == photo else { return }
+            // Commit all analysis state together only after cancellable work finishes.
+            analysisRunning = false
             depth = result; hasDepth = result.depth != nil; hasSubject = result.subject != nil; depthStatus = result.explanation
             matteStatus = result.matteExplanation
-            if let mask = result.subject {
-                let texture = try await render(mask, recipe: Recipe(), look: .original, depth: nil, max: 1800)
-                guard selectedPhotoID == photo else { return }; portraitPreview = texture
-            }
-            if let hair = result.hair {
-                let texture = try await render(hair, recipe: Recipe(), look: .original, depth: nil, max: 1800)
-                guard selectedPhotoID == photo else { return }; hairPreview = texture
-                try await saveMask(hair, photo: photo, suffix: "-hair", format: .RGBA16)
-            }
+            portraitPreview = nextPortrait; hairPreview = nextHair; depthPreview = nextDepth
+            if let hair = result.hair { try await saveMask(hair, photo: photo, suffix: "-hair", format: .RGBA16) }
             if let portrait = result.portrait { try await saveMask(portrait, photo: photo, suffix: "-portrait", format: .RGBA16) }
-            if let map = result.depth {
-                let texture = try await render(map, recipe: Recipe(), look: .original, depth: nil, max: 1800)
-                guard selectedPhotoID == photo else { return }
-                depthPreview = texture
-            }
             if persistMask, let mask = result.subject { try await saveMask(mask, photo: photo) }
-            if let depth = result.depth { try await saveMask(depth, photo: photo, suffix: "-depth", format: .RGBA16) }
+            if let map = result.depth { try await saveMask(map, photo: photo, suffix: "-depth", format: .RGBA16) }
+            guard selectedPhotoID == photo else { return }
             scheduleRender()
-        } catch { self.error = error.localizedDescription }
-        busy = false
+        } catch is CancellationError {
+            if selectedPhotoID == photo { depthStatus = "Analysis cancelled • previous depth retained" }
+        } catch {
+            guard selectedPhotoID == photo, !cancellation.isCancelled else { return }
+            self.error = error.localizedDescription
+            depthStatus = "\(selectedEngine.rawValue) failed: \(error.localizedDescription)"
+        }
     }
+    private func renderDepthTexture(_ map: CIImage) async throws -> UIImage {
+        // Older saved maps store their scalar in red only; inspect all maps as gray.
+        let gray = map.applyingFilter("CIColorMatrix", parameters: [
+            "inputGVector": CIVector(x: 1, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 1, y: 0, z: 0, w: 0)])
+        return try await render(gray, recipe: Recipe(), look: .original, depth: nil, max: 1800)
+    }
+
     func refine(normalized region: CGRect) async {
         guard let original, let existing = depth?.depth else { return }
-        busy = true
-        defer { busy = false }
-        let photo = selectedPhotoID, service = depthService, method = depthRefinementMethod
+        guard !analysisRunning else { return }
+        let cancellation = DepthCancellation(); depthCancellation = cancellation
+        busy = true; analysisRunning = true; cancellingAnalysis = false
+        defer { if depthCancellation === cancellation { if cancellation.isCancelled { depthStatus = "Cancelled • previous depth retained" }; busy = false; analysisRunning = false; cancellingAnalysis = false; depthCancellation = nil } }
+        depthStatus = "Refining selected area…"
+        let photo = selectedPhotoID, service = depthService, method = depthRefinementMethod, selectedEngine = depthEngine
         let crop = CGRect(x: region.minX * original.extent.width, y: (1 - region.maxY) * original.extent.height, width: region.width * original.extent.width, height: region.height * original.extent.height)
         do {
             let result: DepthRefinementResult = try await withCheckedThrowingContinuation { continuation in
-                worker.async { continuation.resume(with: Result { try service.refineDepth(original, region: crop, existing: existing, method: method) }) }
+                worker.async { continuation.resume(with: Result { try service.refineDepth(original, region: crop, existing: existing, method: method, engine: selectedEngine, cancellation: cancellation) }) }
             }
-            guard selectedPhotoID == photo else { return }
+            guard selectedPhotoID == photo, !cancellation.isCancelled else { return }
             let mask = result.image
+            let texture = try await renderDepthTexture(mask)
+            try cancellation.check()
+            guard selectedPhotoID == photo else { return }
+            analysisRunning = false
             depth?.depth = mask
             depthStatus = method == .contextual ? "On-device context crop refined • edges feathered" : "On-device detail fusion • \(result.acceptedTiles)/4 tiles accepted • \(result.rejectedTiles) rejected • experimental"
-            let texture = try await render(mask, recipe: Recipe(), look: .original, depth: nil, max: 1800)
-            guard selectedPhotoID == photo else { return }
             depthPreview = texture
             try await saveMask(mask, photo: photo, suffix: "-depth", format: .RGBA16)
             scheduleRender()
-        } catch { self.error = error.localizedDescription }
-        busy = false
+        } catch is CancellationError {
+            if selectedPhotoID == photo { depthStatus = "Refinement cancelled • previous depth retained" }
+        } catch { if selectedPhotoID == photo, !cancellation.isCancelled { self.error = error.localizedDescription } }
     }
 
     private func saveMask(_ image: CIImage, photo: UUID?, suffix: String = "-mask", format: CIFormat = .RGBA8) async throws {
@@ -281,6 +324,22 @@ final class EditorStore: ObservableObject {
                 })
             }
         }
+    }
+
+    var hasLivePhoto: Bool { selectedPhotoID.map { FileManager.default.fileExists(atPath: documents.appendingPathComponent($0.uuidString + ".mov").path) } ?? false }
+    func exportLiveOriginal() async {
+        guard let id = selectedPhotoID, let record = photos.first(where: { $0.id == id }) else { return }
+        do {
+            let permission = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard permission == .authorized || permission == .limited else { throw LutelierError.message("Allow Lutelier to add photos in Settings.") }
+            let still = documents.appendingPathComponent(record.filename), movie = documents.appendingPathComponent(id.uuidString + ".mov")
+            try await PHPhotoLibrary.shared().performChanges {
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .photo, fileURL: still, options: nil)
+                request.addResource(with: .pairedVideo, fileURL: movie, options: nil)
+            }
+            message = "Live Photo original saved to Photos."
+        } catch { self.error = error.localizedDescription }
     }
 
     var hasRaw: Bool {
