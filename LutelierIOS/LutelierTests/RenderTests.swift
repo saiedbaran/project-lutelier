@@ -88,10 +88,11 @@ final class RenderTests: XCTestCase {
         let previous = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true; previous?.makeKeyAndVisible() }
-        for variant in ["editor", "compare", "expanded-looks", "depth", "depth-blur", "depth-lens", "depth-refine", "compact"] {
-            let expanded = variant == "compare" || variant == "expanded-looks"
+        for variant in ["editor", "compare", "expanded-looks", "depth-full-setup", "depth-full-blur", "depth-full-lens", "depth-full-refine", "depth", "depth-blur", "depth-lens", "depth-refine", "compact"] {
+            store.hasDepth = variant.hasPrefix("depth-full") // Layout fixture for enabled depth controls.
+            let expanded = variant == "compare" || variant == "expanded-looks" || variant.hasPrefix("depth-full")
             window.frame = variant == "compact" ? CGRect(x: 0, y: 0, width: 320, height: 568) : scene.coordinateSpace.bounds
-            let host = UIHostingController(rootView: EditorView(store: store, expandedPhoto: expanded, comparing: variant == "compare", initialTab: variant.hasPrefix("depth") ? .depth : .looks, initialDepthSection: variant == "depth-blur" ? "Blur" : variant == "depth-lens" ? "Lens" : variant == "depth-refine" ? "Refine" : "Setup"))
+            let host = UIHostingController(rootView: EditorView(store: store, expandedPhoto: expanded, comparing: variant == "compare", initialTab: variant.hasPrefix("depth") ? .depth : .looks, initialDepthSection: variant.hasSuffix("blur") ? "Blur" : variant.hasSuffix("lens") ? "Lens" : variant.hasSuffix("refine") ? "Refine" : "Setup"))
             window.rootViewController = host; window.makeKeyAndVisible()
             try await Task.sleep(for: .milliseconds(800))
             host.view.layoutIfNeeded()

@@ -86,6 +86,7 @@ struct EditorView: View {
                     if !expandedPhoto { header } else { fullscreenBrand }
                     if let image = store.preview {
                         photoStage(image)
+                            .padding(.horizontal, expandedPhoto && tab == .depth ? 10 : 0)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
                     } else { welcome }
@@ -94,7 +95,10 @@ struct EditorView: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     if expandedPhoto {
-                        if tab == .looks && !compare { expandedLooks } else { expandedToolbar }
+                        if tab == .looks && !compare { expandedLooks }
+                        else if tab == .depth && !compare {
+                            FullscreenDepthPanel(store: store, motion: lensMotion, section: $depthSection, texture: $analysisTexture, selecting: $selectingDepth, region: $depthSelection)
+                        } else { expandedToolbar }
                     } else { bottomBar }
                 }.padding(.horizontal, expandedPhoto ? 6 : 16).padding(.vertical, 8)
                 if store.busy && !store.analysisRunning { ProgressView().padding(22).lutelierGlass().accessibilityLabel("Processing photograph") }
@@ -189,6 +193,13 @@ struct EditorView: View {
                     }
                 }
                 Spacer()
+                if expandedPhoto && tab == .depth && !compare {
+                    Picker("Depth tools", selection: $depthSection) {
+                        ForEach(["Setup", "Blur", "Lens", "Refine"], id: \.self) { Text($0).tag($0) }
+                    }.pickerStyle(.segmented).padding(6)
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                        .frame(maxWidth: 380)
+                }
                 if !compare && !expandedPhoto && (selectingDepth || imageFrame.height > 200) {
                     Text(selectingDepth ? "Draw a box to refine depth" : "Pinch to zoom · double-tap to reset")
                         .font(.caption2).lineLimit(1).minimumScaleFactor(0.7).padding(.horizontal, 12).padding(.vertical, 8).glassEffect().allowsHitTesting(false)
@@ -628,5 +639,207 @@ struct EditorView: View {
                 Spacer()
             }.padding(24).background(Palette.ink).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showAssistant = false } } }
         }.preferredColorScheme(.dark).presentationDetents([.large])
+    }
+}
+
+private struct FullscreenDepthPanel: View {
+    @ObservedObject var store: EditorStore
+    @ObservedObject var motion: LensMotion
+    @Binding var section: String
+    @Binding var texture: AnalysisTexture
+    @Binding var selecting: Bool
+    @Binding var region: CGRect?
+    @Namespace private var underline
+    @State private var item = "Model"
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var items: [String] {
+        switch section {
+        case "Blur": return ["Far blur", "Near blur", "Focus plane"]
+        case "Lens": return ["Shape"] + (store.recipe.bokeh == .polygon ? ["Blades"] : store.recipe.bokeh == .anamorphic ? ["Oval ratio"] : []) + ["Highlights", "Cat-eye", "Rotation", "Bloom", "Sensitivity", "Edges"]
+        case "Refine": return ["Method"]
+        default: return ["Model", "View", "Portrait"]
+        }
+    }
+    var body: some View {
+        VStack(spacing: 10) {
+            GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    HStack(spacing: 24) {
+                        ForEach(items, id: \.self) { name in
+                            Button {
+                                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { item = name }
+                            } label: {
+                                VStack(spacing: 7) {
+                                    Text(name).font(.subheadline.weight(item == name ? .semibold : .regular))
+                                        .foregroundStyle(item == name ? .white : .white.opacity(0.55))
+                                    ZStack {
+                                        Capsule().fill(.clear).frame(height: 3)
+                                        if item == name { Capsule().fill(Palette.amber).frame(height: 3).matchedGeometryEffect(id: "item", in: underline) }
+                                    }
+                                }.fixedSize(horizontal: true, vertical: false).frame(minHeight: 44)
+                            }.buttonStyle(.plain).id(name).accessibilityAddTraits(item == name ? .isSelected : [])
+                        }
+                    }.padding(.horizontal, 6).frame(minWidth: geometry.size.width)
+                }.onChange(of: item) { _, value in
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { proxy.scrollTo(value, anchor: .center) }
+                }
+            }
+            }.frame(height: 44)
+            if store.analysisRunning {
+                HStack {
+                    ProgressView()
+                    Text(store.depthStatus).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                    Button(store.cancellingAnalysis ? "Cancelling…" : "Cancel") { store.cancelAnalysis() }.disabled(store.cancellingAnalysis)
+                }.frame(height: 148)
+            } else {
+                controls.frame(height: 148).disabled(store.busy)
+            }
+        }.padding(.horizontal, 12).padding(.vertical, 4).fixedSize(horizontal: false, vertical: true)
+            .onAppear { if !items.contains(item) { item = items[0] } }
+            .onChange(of: section) { _, _ in item = items[0]; selecting = false; texture = .photo }
+            .onChange(of: store.recipe.bokeh) { _, _ in if !items.contains(item) { item = items[0] } }
+    }
+    @ViewBuilder private var controls: some View {
+        switch section {
+        case "Blur":
+            if store.hasDepth || (store.hasSubject && item == "Far blur") {
+                if item == "Near blur" { ruler("Near blur", \.nearBlur, 0...1) }
+                else if item == "Focus plane" { ruler("Focus plane", \.focusDepth, 0...1) }
+                else { ruler("Far blur", \.farBlur, 0...1) }
+            } else { Text("Analyze depth in Setup to enable this control.").font(.caption).foregroundStyle(.secondary) }
+        case "Lens":
+            switch item {
+            case "Shape":
+                cards(Bokeh.allCases.map(\.rawValue), selected: store.recipe.bokeh.rawValue, symbols: ["Soft": "circle.dotted", "Disc": "circle.fill", "Ring": "circle", "Anamorphic": "oval", "Polygon": "hexagon"]) { value in
+                    if let shape = Bokeh(rawValue: value) { store.edit { $0.bokeh = shape } }
+                }
+            case "Blades":
+                cards((3...9).map(String.init), selected: String(store.recipe.apertureBlades), symbols: [:]) { value in
+                    if let count = Int(value) { store.edit { $0.apertureBlades = count } }
+                }
+            case "Oval ratio": ruler("Oval ratio", \.anamorphicRatio, 1...3)
+            case "Highlights": ruler("Bokeh highlights", \.bokehHighlights, 0...1)
+            case "Cat-eye": ruler("Cat-eye edges", \.catEye, 0...1)
+            case "Rotation": ruler("Aperture rotation", \.apertureRotation, -90...90)
+            case "Bloom": ruler("Background bloom", \.bokehBloom, 0...1)
+            case "Sensitivity": ruler("Highlight sensitivity", \.highlightSensitivity, 0...1)
+            default:
+                cards(["Protected", "Natural"], selected: store.recipe.protectPortraitEdges ? "Protected" : "Natural", symbols: ["Protected": "person.crop.rectangle", "Natural": "person"]) { value in store.edit { $0.protectPortraitEdges = value == "Protected" } }.disabled(!store.hasSubject)
+            }
+        case "Refine":
+            if store.hasDepth {
+                VStack(spacing: 8) {
+                    cards(["Context", "Detail tiles"], selected: store.depthRefinementMethod == .contextual ? "Context" : "Detail tiles", symbols: ["Context": "viewfinder", "Detail tiles": "square.grid.2x2"]) { store.depthRefinementMethod = $0 == "Context" ? .contextual : .overlapping }
+                    HStack {
+                        Button(selecting ? "Redraw area" : "Select area") { region = nil; selecting = true }
+                        Button("Refine") { if let region { Task { await store.refine(normalized: region) } } }.disabled(region == nil).buttonStyle(.glassProminent)
+                    }
+                }
+            } else { Text("Analyze depth in Setup before selecting an area.").font(.caption).foregroundStyle(.secondary) }
+        default:
+            if item == "Model" {
+                HStack(spacing: 8) {
+                    ForEach(DepthEngine.allCases.filter(\.isInstalled)) { engine in
+                        modelAction(engine.rawValue.replacingOccurrences(of: "Depth Anything", with: "DA"), symbol: "camera.aperture", selected: store.depthEngine == engine) { store.depthEngine = engine }
+                            .accessibilityLabel(engine.rawValue)
+                    }
+                    Capsule().fill(.white.opacity(0.1)).frame(width: 2, height: 34).offset(y: -19).padding(.horizontal, 3)
+                    modelAction(store.hasDepth ? "Update depth" : "Analyze depth", symbol: "arrow.triangle.2.circlepath", selected: false) {
+                        selecting = false; Task { await store.analyze(regenerate: true) }
+                    }
+                }
+            } else if item == "View" {
+                cards(AnalysisTexture.allCases.filter { $0 == .photo || ($0 == .depth && store.hasDepth) || ($0 == .portrait && store.portraitPreview != nil) || ($0 == .hair && store.hairPreview != nil) }.map(\.rawValue), selected: texture.rawValue, symbols: ["Photo": "photo", "Depth": "square.3.layers.3d", "Portrait": "person", "Hair": "person.crop.square"]) { value in if let view = AnalysisTexture(rawValue: value) { texture = view } }
+            } else {
+                VStack(spacing: 10) {
+                    Text(store.matteStatus).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Button(store.hasSubject ? "Refresh portrait mask" : "Find portrait mask") { Task { await store.analyze(portraitOnly: true) } }.buttonStyle(.glassProminent)
+                }
+            }
+        }
+    }
+    private func modelAction(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: symbol).font(.system(size: 25, weight: .medium)).frame(width: 52, height: 52)
+                    .background {
+                        if selected { Circle().fill(AngularGradient(colors: [.purple, .blue, .teal, .purple], center: .center)).blur(radius: 14).offset(x: reduceMotion ? 0 : motion.x, y: reduceMotion ? 0 : motion.y - 6) }
+                    }.glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+                Text(title).font(.caption2.weight(selected ? .semibold : .regular)).lineLimit(2).minimumScaleFactor(0.8).multilineTextAlignment(.center).frame(height: 30)
+            }.frame(maxWidth: .infinity).foregroundStyle(selected ? Palette.amber : .white)
+        }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
+    }
+    private func ruler(_ title: String, _ key: WritableKeyPath<Recipe, Double>, _ range: ClosedRange<Double>) -> some View {
+        DepthRuler(title: title, value: store.slider(key), range: range, defaultValue: Recipe()[keyPath: key], onEditing: { if $0 { store.beginSlider() } else { store.endSlider() } })
+    }
+    private func cards(_ options: [String], selected: String, symbols: [String: String], action: @escaping (String) -> Void) -> some View {
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    HStack(spacing: 12) {
+                        ForEach(options, id: \.self) { option in
+                            let active = selected == option
+                            Button { action(option) } label: {
+                                VStack(spacing: 5) {
+                                    Image(systemName: symbols[option] ?? "camera.aperture")
+                                        .font(.system(size: active ? 28 : 23, weight: .medium)).frame(width: active ? 62 : 52, height: active ? 62 : 52)
+                                        .background { if active { Circle().fill(AngularGradient(colors: [.purple, .blue, .teal, .purple], center: .center)).blur(radius: 14).offset(x: reduceMotion ? 0 : motion.x, y: reduceMotion ? 0 : motion.y - 6) } }
+                                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+                                        .frame(height: 64)
+                                    Text(option.replacingOccurrences(of: "Depth Anything", with: "DA")).font(.caption2.weight(active ? .semibold : .regular)).lineLimit(2).minimumScaleFactor(0.8).multilineTextAlignment(.center).frame(height: 30)
+                                }.frame(width: 96).foregroundStyle(active ? Palette.amber : .white)
+                            }.buttonStyle(.plain).id(option).accessibilityLabel(option).accessibilityAddTraits(active ? .isSelected : [])
+                        }
+                    }.padding(.horizontal, max(0, (geometry.size.width - 96) / 2))
+                }.scrollClipDisabled()
+                    .onAppear { proxy.scrollTo(selected, anchor: .center) }
+                    .onChange(of: selected) { _, value in withAnimation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85)) { proxy.scrollTo(value, anchor: .center) } }
+            }
+        }.frame(height: 104)
+    }
+}
+
+private struct DepthRuler: View {
+    var title: String
+    @Binding var value: Double
+    var range: ClosedRange<Double>
+    var defaultValue: Double
+    var onEditing: (Bool) -> Void
+    @State private var dragStart: Double?
+    private var span: Double { range.upperBound - range.lowerBound }
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(title).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Reset") { onEditing(true); value = defaultValue; onEditing(false) }.font(.caption).buttonStyle(.plain)
+            }
+            Text(value, format: .number.precision(.fractionLength(range.upperBound > 10 ? 0 : 2))).font(.title2.monospacedDigit()).foregroundStyle(Palette.amber)
+            GeometryReader { geometry in
+                Canvas { context, size in
+                    for tick in 0...100 {
+                        let x = size.width / 2 + (Double(tick) / 100 - (value - range.lowerBound) / span) * size.width * 2
+                        guard x >= 0 && x <= size.width else { continue }
+                        var line = Path(); let height: CGFloat = tick % 10 == 0 ? 26 : tick % 5 == 0 ? 18 : 10
+                        line.move(to: CGPoint(x: x, y: (size.height-height)/2)); line.addLine(to: CGPoint(x: x, y: (size.height+height)/2))
+                        context.stroke(line, with: .color(.white.opacity(tick % 10 == 0 ? 0.8 : 0.35)), lineWidth: 1)
+                    }
+                    var marker = Path(); marker.move(to: CGPoint(x: size.width/2, y: 2)); marker.addLine(to: CGPoint(x: size.width/2, y: size.height-2))
+                    context.stroke(marker, with: .color(Palette.amber), lineWidth: 3)
+                }.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        if dragStart == nil { dragStart = value; onEditing(true) }
+                        value = SliderDetent.value((dragStart ?? value) - Double(gesture.translation.width / max(geometry.size.width * 2, 1)) * span, in: range, defaultValue: defaultValue)
+                    }.onEnded { _ in dragStart = nil; onEditing(false) })
+            }.frame(height: 40)
+                .accessibilityElement().accessibilityLabel(title).accessibilityValue(String(format: "%.2f", value))
+                .accessibilityAdjustableAction { direction in
+                    onEditing(true)
+                    value = min(range.upperBound, max(range.lowerBound, value + (direction == .increment ? 1 : -1) * span / 100))
+                    onEditing(false)
+                }
+        }.sensoryFeedback(.selection, trigger: value == defaultValue || value == 0)
+            .onDisappear { if dragStart != nil { dragStart = nil; onEditing(false) } }
     }
 }
